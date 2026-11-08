@@ -1,0 +1,1123 @@
+<section class="chapter" id="ch-09" data-chapter="09">
+  <header class="chapter-head">
+    <div class="ch-meta">
+      <span class="ch-num" aria-hidden="true">09</span>
+      <p class="kicker">Roadmap &amp; Reading List</p>
+    </div>
+    <h2>全栈路线图与经典论文索引</h2>
+    <p class="lede">前八章各讲一层，每层都给了公式与数字，却没有回答一个更实际的问题：从零开始，先做什么、后做什么、做到什么程度算过。这一章给出一条按周排的学习路径、一张按级验收的项目阶梯，以及 30 篇论文与 15 个开源项目的索引。</p>
+  </header>
+
+  <p>路线图上最容易做错的决定是先学哪一门。答案不是偏好问题：60 kg 的机器人单腿支撑时地面反力 589 N，膝的垂直力臂 0.15 m，静力矩就是 88 N·m；一台峰值 35 N·m 的关节，换什么控制算法都站不起来。力矩上限决定控制能做到什么，控制的接口决定学习能接在哪里，所以顺序只能从机械往上建。</p>
+
+  <p>这条链也解释了「先学强化学习」的人为什么容易卡住。策略在仿真里走、真机一上就摔，可能的原因有三个：观测里有真机拿不到的量（感知问题）、执行器延迟没建模（实时问题）、关节根本给不出指令力矩（硬件问题）。没有前两层，你连排查顺序都没有。</p>
+
+  <h2>三条主线：顺序由力矩和带宽决定</h2>
+  <p>这一节解决什么问题：说清三条主线各产出什么，以及跳过其中一条时，失败会以什么形式出现。</p>
+
+  <p>第一条线做出能动的腿：02 章的构型与静力学、03 章的电机与驱动。产出很具体——一个能在 1 kHz 下跟踪力矩指令的关节，和一条能承重的腿。第二条线让它站住、走起来：04 章的实时系统、05 章的全身控制（Whole-Body Control, WBC）、06 章的步态与模型预测控制（Model Predictive Control, MPC），产出是在已知地面上连续 60 s 不摔，被 50 N 推一下能在 1 s 内回到原位。第三条线让它适应没见过的世界：07 章的强化学习与实机迁移（sim-to-real transfer）、08 章的感知与操作，产出是换地形、换负载、换任务不必重写控制器。</p>
+
+  <p>三道门槛里，第一道是力矩，算法绕不过去。按 02 章的 <span class="formula-inline">τ = F · d</span> 自己核一遍：60 kg 单腿支撑时地面反力 589 N，膝的垂直力臂取 0.15 m，静力矩 88 N·m；踝的力臂被足长锁在 0.1 m 以内，只有 59 N·m。同样的姿态换到一台 12 kg 的小双足，单腿 118 N，膝只需要 18 N·m。5k 元档能买到峰值 35 N·m 的关节，做 12 kg 的机器有余量，做 60 kg 的整机只有需求的 40%（35 ÷ 88）——这不是调参能补的差距。</p>
+
+  <p>第二道是带宽。1 kHz 的环里，收包 50–100 µs、估计 50–150 µs、求解 200–500 µs、下发 50–100 µs，加起来 350–850 µs；工程上要求留 20–30% 余量，也就是说最坏情况已经贴着 1 ms 的截止期。延迟还会换成相位：10 ms 的纯延迟，在 3 Hz 的步频上是 10.8°（<span class="formula-inline">φ = 360° · f · T<sub>d</sub></span>），在 10 Hz 的平衡环上是 36°。相位裕度听起来抽象，它对应的现象很具体：机器人被推一下，是摆两下停住，还是越摆越大。</p>
+
+  <p>第三道是接口与仿真。策略的典型输出是关节目标角 q<sub>d</sub>，交给 1 kHz 的 PD 环；策略跑 50 Hz，一拍 20 ms，中间有 20 次 PD 更新。如果 PD 环抖动 200 µs，或者关节只能给出需求力矩的 60%，策略学到的是另一个执行器——它在仿真里补偿的那些偏差，真机上不存在。07 章把 sim2sim 闸门看得比算法更重，原因就在这里。</p>
+
+  <p>三条线可以并行读论文，不能并行建系统。没有能跑的关节，域随机化（Domain Randomization, DR）没有可随机化的对象；没有 WBC，接触观测没有消费者；没有状态估计，「走 10 m」这句话无法判定是成功还是侥幸。</p>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 334" role="img" aria-labelledby="ch09-fig1-title ch09-fig1-desc">
+      <title id="ch09-fig1-title">七级项目阶梯的累计时间排期</title>
+      <desc id="ch09-fig1-desc">横轴为累计时间 0 到 52 周，分七级：L1 单关节台架 0 到 4 周，L2 单腿弹跳 4 到 8 周，L3 双足原地平衡 8 到 12 周，L4 平面行走 12 到 18 周，L5 三维行走 18 到 26 周，L6 抗扰与台阶 26 到 40 周，L7 操作 40 到 52 周。颜色区分机械与硬件、控制、学习与感知、操作四条线，并在 12 周、6 个月、12 个月处标出检查点。</desc>
+      <line x1="170.0" y1="66" x2="170.0" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="201.2" y1="66" x2="201.2" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="232.3" y1="66" x2="232.3" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="263.5" y1="66" x2="263.5" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="294.6" y1="66" x2="294.6" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="325.8" y1="66" x2="325.8" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="356.9" y1="66" x2="356.9" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="388.1" y1="66" x2="388.1" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="419.2" y1="66" x2="419.2" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="450.4" y1="66" x2="450.4" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="481.5" y1="66" x2="481.5" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="512.7" y1="66" x2="512.7" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="543.8" y1="66" x2="543.8" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="575.0" y1="66" x2="575.0" y2="286" style="stroke:var(--line);stroke-width:.5"/>
+      <rect x="170.0" y="78" width="31.2" height="14" style="fill:var(--d5)"/>
+      <text x="160.0" y="89.5" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--ink);">L1 单关节台架</text>
+      <text x="207.2" y="89.5" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">4 周</text>
+      <rect x="201.2" y="108" width="31.2" height="14" style="fill:var(--d1)"/>
+      <text x="160.0" y="119.5" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--ink);">L2 单腿弹跳</text>
+      <text x="238.3" y="119.5" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">4 周</text>
+      <rect x="232.3" y="138" width="31.2" height="14" style="fill:var(--d1)"/>
+      <text x="160.0" y="149.5" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--ink);">L3 双足原地平衡</text>
+      <text x="269.5" y="149.5" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">4 周</text>
+      <rect x="263.5" y="168" width="46.7" height="14" style="fill:var(--d1)"/>
+      <text x="160.0" y="179.5" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--ink);">L4 平面行走</text>
+      <text x="316.2" y="179.5" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">6 周</text>
+      <rect x="310.2" y="198" width="62.3" height="14" style="fill:var(--d3)"/>
+      <text x="160.0" y="209.5" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--ink);">L5 3D 行走</text>
+      <text x="378.5" y="209.5" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">8 周</text>
+      <rect x="372.5" y="228" width="109.0" height="14" style="fill:var(--d3)"/>
+      <text x="160.0" y="239.5" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--ink);">L6 抗扰与台阶</text>
+      <text x="487.5" y="239.5" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">14 周</text>
+      <rect x="481.5" y="258" width="93.5" height="14" style="fill:var(--d4)"/>
+      <text x="160.0" y="269.5" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--ink);">L7 操作</text>
+      <text x="569.0" y="269.5" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--paper);">12 周</text>
+      <line x1="12" y1="66" x2="575" y2="66" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="12" y1="286" x2="575" y2="286" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="263.5" y1="60" x2="263.5" y2="286" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:4 4;stroke-opacity:.55"/>
+      <text x="263.5" y="56.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--accent-3);">12 周 · 门 3</text>
+      <line x1="372.5" y1="60" x2="372.5" y2="286" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:4 4;stroke-opacity:.55"/>
+      <text x="372.5" y="56.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--accent-3);">6 个月</text>
+      <line x1="575.0" y1="60" x2="575.0" y2="286" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:4 4;stroke-opacity:.55"/>
+      <text x="575.0" y="56.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--accent-3);">12 个月</text>
+      <rect x="170" y="26" width="11" height="11" style="fill:var(--d5)"/>
+      <text x="186.0" y="35.5" class="t-label" style="font-size:12px;fill:var(--muted-ink);">机械 + 硬件</text>
+      <rect x="275.8" y="26" width="11" height="11" style="fill:var(--d1)"/>
+      <text x="291.8" y="35.5" class="t-label" style="font-size:12px;fill:var(--muted-ink);">控制</text>
+      <rect x="337.8" y="26" width="11" height="11" style="fill:var(--d3)"/>
+      <text x="353.8" y="35.5" class="t-label" style="font-size:12px;fill:var(--muted-ink);">学习 + 感知</text>
+      <rect x="443.6" y="26" width="11" height="11" style="fill:var(--d4)"/>
+      <text x="459.6" y="35.5" class="t-label" style="font-size:12px;fill:var(--muted-ink);">操作</text>
+      <line x1="170" y1="286" x2="575" y2="286" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="170.0" y1="286" x2="170.0" y2="291" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="170.0" y="305.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">0</text>
+      <line x1="201.2" y1="286" x2="201.2" y2="291" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="201.2" y="305.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">4</text>
+      <line x1="232.3" y1="286" x2="232.3" y2="291" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="232.3" y="305.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">8</text>
+      <line x1="263.5" y1="286" x2="263.5" y2="291" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="263.5" y="305.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">12</text>
+      <line x1="310.2" y1="286" x2="310.2" y2="291" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="310.2" y="305.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">18</text>
+      <line x1="372.5" y1="286" x2="372.5" y2="291" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="372.5" y="305.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">26</text>
+      <line x1="481.5" y1="286" x2="481.5" y2="291" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="481.5" y="305.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">40</text>
+      <line x1="575.0" y1="286" x2="575.0" y2="291" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="575.0" y="305.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">52</text>
+      <text x="575.0" y="322.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">累计时间 / 周</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 9.1</span>七级阶梯的累计时间：前三级各 4 周共 12 周，从 3D 行走到抗扰要再花 14 周。
+      <span class="fig-note read-for">读者应看出：时间不是线性增长的；第 12 周只到「能站」，到「能抗扰」之间还隔着 07、08 两章的方法。</span>
+      <span class="fig-src">来源：作者绘制；周数是学习排期，不是实测工期。</span>
+    </figcaption>
+  </figure>
+
+  <aside class="callout callout--intuition" data-reveal>
+    <p class="callout-kicker">直觉 <span>Intuition</span></p>
+    <p>把每一层都折成同一个问题：这一毫秒，关节能不能给出我要的力矩？机械决定上限，总线决定准时，估计决定这个力矩对应世界的哪个状态，策略决定要多少。四者里缺一个，另外三个的精度都白费。</p>
+  </aside>
+
+  <h2>12 周入门：每周 6–8 小时</h2>
+  <p>这一节解决什么问题：给出一份 12 周、87 小时、每个周末都能自己验收的入门计划，以及三个必须停下来的门。</p>
+
+  <p>计划假设你会 Python 和线性代数，没有机器人，预算 5k–30k 元，或者只用仿真加一个关节模组。每周 6–8 小时，12 周合计 87 小时。三道门在第 4、8、12 周：单关节台架证明「能驱动」，单腿弹跳证明「能控住一个不稳定的自由度」，双足原地平衡证明「能同时满足两条腿的接触约束」。三件事分别对应机械、控制、系统集成，顺序不能换。</p>
+
+  <p>每周只做一件事，是因为入门阶段最大的浪费不是学得慢，而是同时改三个东西。周五改增益、周六换电机、周日发现走不起来，你无法判断是哪一项起了作用。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 9.1 12 周计划：每周学什么、做什么、怎么算过</caption>
+      <thead>
+        <tr><th class="num">周</th><th>学什么</th><th>动手做什么</th><th>验收标准</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="num">1</td><td>工具链与量纲：Linux、Git、NumPy、MuJoCo</td><td>装 MuJoCo 跑一个 12 DoF 模型自由落体；用 Python 手算三关节静力矩</td><td>落体 1 s 位移 4.9 m ±2%；手算与算例差 &lt;5%</td></tr>
+        <tr><td class="num">2</td><td>刚体运动学：旋转矩阵、齐次变换、指数积</td><td>写 2 连杆正解与阻尼最小二乘逆解，画可达域</td><td>末端误差 &lt;1 mm；κ &gt; 100 时报警</td></tr>
+        <tr><td class="num">3</td><td>静力学与雅可比：<span class="formula-inline">τ = J<sup>⊤</sup>F</span>、杠杆臂</td><td>算 60 kg 单腿 0–90° 膝力矩曲线，用 Pinocchio 复核</td><td>两条曲线差 &lt;5%；给出膝/踝峰值与安全系数</td></tr>
+        <tr><td class="num">4</td><td>单关节台架（门 1）：FOC、编码器、CAN、电流环</td><td>一个准直驱（Quasi-Direct Drive, QDD）模组 + 驱动器 + 48 V 电源，跑 1 kHz 力矩跟踪</td><td>1 Hz 正弦 RMSE &lt;0.5 N·m；阶跃超调 &lt;20%；堵转 10 s 不触温保</td></tr>
+        <tr><td class="num">5</td><td>实时：周期、抖动、最坏执行时间（WCET）、CAN FD 帧时间</td><td>MCU 或 PREEMPT_RT 上跑 1 kHz 循环，翻转 GPIO，示波器测 10 万周期</td><td>p99.9 抖动 &lt;50 µs；丢帧率 &lt;10<sup>−5</sup></td></tr>
+        <tr><td class="num">6</td><td>浮基动力学：<span class="formula-inline">M(q)</span>、<span class="formula-inline">h(q, <span class="qdot">q</span>)</span>、RNEA</td><td>Pinocchio 算 12 DoF 双足的 M 与 h，与手算两连杆对账</td><td>M 对称正定；单次 RNEA &lt;20 µs；与手算差 &lt;1%</td></tr>
+        <tr><td class="num">7</td><td>关节 PD 与重力补偿：阻抗、增益整定</td><td>MuJoCo 里 12 DoF 双足原地站 10 s，加 ±10% 质量扰动</td><td>不摔；跟踪误差 &lt;2°；扰动后 1 s 恢复</td></tr>
+        <tr><td class="num">8</td><td>单腿弹跳（门 2）：SLIP、Raibert 三规则、触地检测</td><td>3 关节单腿先在 MuJoCo 里跳，再上台架</td><td>连续 100 跳；顶点高度方差 &lt;10%；每跳都有腾空相</td></tr>
+        <tr><td class="num">9</td><td>LIPM 与 ZMP：<span class="formula-inline">ω = √(g/z<sub>c</sub>)</span>、预览控制</td><td>实现 5 ms 采样、1.6 s 预览的 ZMP 跟踪</td><td>ZMP 误差 &lt;1 cm；CoM 比 ZMP 提前 0.2 s 启动</td></tr>
+        <tr><td class="num">10</td><td>凸 MPC：单刚体模型、摩擦锥、OSQP</td><td>写 0.5 s 视界、20 ms 步长的 MPC，跑平面行走</td><td>单次求解 &lt;5 ms；1 m/s 走 10 m 不摔</td></tr>
+        <tr><td class="num">11</td><td>强化学习：PPO、GAE、观测与奖励设计</td><td>legged_gym 或 Isaac Lab 训 G1 平地 3000 iter，导出 ONNX</td><td>MuJoCo sim2sim 直行 10 m；50 Hz 推理 &lt;2 ms</td></tr>
+        <tr><td class="num">12</td><td>双足原地平衡（门 3）：WBC、摩擦锥、状态估计</td><td>12–23 DoF 双足原地平衡，接 1 kHz 环，加 50 N 侧推</td><td>60 s 不摔；侧推 1 s 内恢复、倾角 &lt;5°；端到端延迟 &lt;30 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>表的最后一列是验收标准，不是建议。过不了就重复一周。第 8 周的弹跳把关节当弹簧用，力矩环差 20%，触地相注入的能量就差 20%，机器人会越跳越歪；这类误差在台架上看得见，在整机上只能看见「摔」。</p>
+
+  <p>图 9.2 是这 12 周的学时账本：动手 52 h，读书 35 h，动手占 60%。第 4、8、12 周各 8 小时里有 6 小时在台架或仿真前——里程碑周不该用来读书。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 310" role="img" aria-labelledby="ch09-fig2-title ch09-fig2-desc">
+      <title id="ch09-fig2-title">12 周计划的每周学时分配</title>
+      <desc id="ch09-fig2-desc">横轴为第 1 到第 12 周，纵轴为每周学时 0 到 8 小时。每周用两根堆叠柱表示读书学时与动手学时，合计 87 小时，其中动手 52 小时。第 4、8、12 周为里程碑周，各 8 小时，动手占 6 小时。</desc>
+      <line x1="70" y1="235.0" x2="560" y2="235.0" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="66" y1="235.0" x2="70" y2="235.0" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="62.0" y="239.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">0</text>
+      <line x1="70" y1="190.0" x2="560" y2="190.0" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="66" y1="190.0" x2="70" y2="190.0" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="62.0" y="194.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">2</text>
+      <line x1="70" y1="145.0" x2="560" y2="145.0" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="66" y1="145.0" x2="70" y2="145.0" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="62.0" y="149.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">4</text>
+      <line x1="70" y1="100.0" x2="560" y2="100.0" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="66" y1="100.0" x2="70" y2="100.0" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="62.0" y="104.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">6</text>
+      <line x1="70" y1="55.0" x2="560" y2="55.0" style="stroke:var(--line);stroke-width:.5"/>
+      <line x1="66" y1="55.0" x2="70" y2="55.0" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="62.0" y="59.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">8</text>
+      <rect x="79.4" y="145.0" width="22" height="90.0" style="fill:var(--d1)"/>
+      <rect x="79.4" y="77.5" width="22" height="67.5" style="fill:var(--d2)"/>
+      <text x="90.4" y="71.5" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">7</text>
+      <text x="90.4" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">1</text>
+      <rect x="120.2" y="167.5" width="22" height="67.5" style="fill:var(--d1)"/>
+      <rect x="120.2" y="77.5" width="22" height="90.0" style="fill:var(--d2)"/>
+      <text x="131.2" y="71.5" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">7</text>
+      <text x="131.2" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">2</text>
+      <rect x="161.1" y="167.5" width="22" height="67.5" style="fill:var(--d1)"/>
+      <rect x="161.1" y="77.5" width="22" height="90.0" style="fill:var(--d2)"/>
+      <text x="172.1" y="71.5" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">7</text>
+      <text x="172.1" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">3</text>
+      <rect x="201.9" y="190.0" width="22" height="45.0" style="fill:var(--d1)"/>
+      <rect x="201.9" y="55.0" width="22" height="135.0" style="fill:var(--d2)"/>
+      <text x="212.9" y="49.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">8</text>
+      <text x="212.9" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">4</text>
+      <rect x="242.8" y="167.5" width="22" height="67.5" style="fill:var(--d1)"/>
+      <rect x="242.8" y="100.0" width="22" height="67.5" style="fill:var(--d2)"/>
+      <text x="253.8" y="94.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">6</text>
+      <text x="253.8" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">5</text>
+      <rect x="283.6" y="145.0" width="22" height="90.0" style="fill:var(--d1)"/>
+      <rect x="283.6" y="55.0" width="22" height="90.0" style="fill:var(--d2)"/>
+      <text x="294.6" y="49.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">8</text>
+      <text x="294.6" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">6</text>
+      <rect x="324.4" y="167.5" width="22" height="67.5" style="fill:var(--d1)"/>
+      <rect x="324.4" y="77.5" width="22" height="90.0" style="fill:var(--d2)"/>
+      <text x="335.4" y="71.5" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">7</text>
+      <text x="335.4" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">7</text>
+      <rect x="365.2" y="190.0" width="22" height="45.0" style="fill:var(--d1)"/>
+      <rect x="365.2" y="55.0" width="22" height="135.0" style="fill:var(--d2)"/>
+      <text x="376.2" y="49.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">8</text>
+      <text x="376.2" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">8</text>
+      <rect x="406.1" y="167.5" width="22" height="67.5" style="fill:var(--d1)"/>
+      <rect x="406.1" y="77.5" width="22" height="90.0" style="fill:var(--d2)"/>
+      <text x="417.1" y="71.5" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">7</text>
+      <text x="417.1" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">9</text>
+      <rect x="446.9" y="167.5" width="22" height="67.5" style="fill:var(--d1)"/>
+      <rect x="446.9" y="77.5" width="22" height="90.0" style="fill:var(--d2)"/>
+      <text x="457.9" y="71.5" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">7</text>
+      <text x="457.9" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">10</text>
+      <rect x="487.8" y="167.5" width="22" height="67.5" style="fill:var(--d1)"/>
+      <rect x="487.8" y="77.5" width="22" height="90.0" style="fill:var(--d2)"/>
+      <text x="498.8" y="71.5" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">7</text>
+      <text x="498.8" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">11</text>
+      <rect x="528.6" y="190.0" width="22" height="45.0" style="fill:var(--d1)"/>
+      <rect x="528.6" y="55.0" width="22" height="135.0" style="fill:var(--d2)"/>
+      <text x="539.6" y="49.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">8</text>
+      <text x="539.6" y="252.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">12</text>
+      <line x1="70" y1="235" x2="560" y2="235" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="233.3" y1="42" x2="233.3" y2="235" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:4 4;stroke-opacity:.5"/>
+      <text x="233.3" y="32.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--accent-3);">W4 台架</text>
+      <path d="M229.3 38 L237.3 38 L233.3 44 Z" style="fill:var(--d4)"/>
+      <line x1="396.7" y1="42" x2="396.7" y2="235" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:4 4;stroke-opacity:.5"/>
+      <text x="396.7" y="32.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--accent-3);">W8 弹跳</text>
+      <path d="M392.7 38 L400.7 38 L396.7 44 Z" style="fill:var(--d4)"/>
+      <line x1="560.0" y1="42" x2="560.0" y2="235" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:4 4;stroke-opacity:.5"/>
+      <text x="560.0" y="32.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--accent-3);">W12 平衡</text>
+      <path d="M556.0 38 L564.0 38 L560.0 44 Z" style="fill:var(--d4)"/>
+      <text x="70.0" y="40.0" class="t-label" style="font-size:12px;fill:var(--muted-ink);">小时 / 周</text>
+      <text x="560.0" y="274.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">周次</text>
+      <rect x="70" y="288" width="11" height="11" style="fill:var(--d1)"/>
+      <text x="86.0" y="297.5" class="t-label" style="font-size:12px;fill:var(--muted-ink);">学（读书、推导）</text>
+      <rect x="208.0" y="288" width="11" height="11" style="fill:var(--d2)"/>
+      <text x="224.0" y="297.5" class="t-label" style="font-size:12px;fill:var(--muted-ink);">做（写代码、上机）</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 9.2</span>12 周计划的学时分配：每周 6–8 小时，合计 87 小时，其中动手 52 小时。
+      <span class="fig-note read-for">读者应看出：三个里程碑周（W4、W8、W12）的动手时间都是 6 小时，占当周 75%；读书集中在第 1–3 周与第 9–10 周。</span>
+      <span class="fig-src">来源：作者绘制，按每周 6–8 小时的排期估算。</span>
+    </figcaption>
+  </figure>
+
+  <aside class="callout callout--field" data-reveal>
+    <p class="callout-kicker">工程经验 <span>Field Note</span></p>
+    <p>第 4 周的台架决定后面 8 周。三个必测项：1 Hz 正弦力矩跟踪 RMSE、阶跃超调、堵转 10 s 的温升。任何一项不过就别进第 5 周——第 8 周的弹跳要把关节当弹簧用，力矩环的误差会被触地相放大成能量误差。</p>
+  </aside>
+
+  <p>计划会超时。多数人超 2–4 周，超时集中在第 6 周（浮基动力学）和第 11 周（RL 环境配置）：前者要把 M(q) 与 h(q, <span class="qdot">q</span>) 和自己手算的两连杆对上，后者要装对显卡驱动与 Isaac 版本。只有 6 小时/周时，先砍第 11 周，把第 12 周延长到 3 周。一台能站 60 s 的机器比一个没地方部署的策略更有价值。</p>
+
+  <section class="demo" data-demo="roadmap-check" aria-labelledby="demo91-title">
+    <div class="demo-bar">
+      <span class="demo-live"><i aria-hidden="true"></i>Live</span>
+      <h4 class="demo-title" id="demo91-title">12 周清单：勾一周，走一格</h4>
+      <span class="demo-tag">Demo 9.1</span>
+    </div>
+    <div class="demo-stage">
+      <div class="rm-wrap">
+        <div class="rm-head">
+          <p class="rm-count" id="demo91-count">第 <span data-role="done">0</span>/12 周</p>
+          <p class="rm-next" data-role="next">下一步：第 1 周 · 工具链与量纲</p>
+        </div>
+        <div class="rm-progress" data-role="bar" role="progressbar" aria-labelledby="demo91-count" aria-valuemin="0" aria-valuemax="12" aria-valuenow="0" aria-valuetext="0 / 12 周">
+          <span class="rm-fill" data-role="fill"></span>
+        </div>
+        <ol class="rm-list">
+          <li class="rm-item">
+            <label class="rm-check" for="demo91-w1">
+              <input type="checkbox" id="demo91-w1">
+              <span class="rm-week">W01</span>
+              <span class="rm-body"><span class="rm-task">工具链与量纲</span><span class="rm-verify">验收：手算三关节力矩，与算例差 &lt;5%</span></span>
+            </label>
+          </li>
+          <li class="rm-item">
+            <label class="rm-check" for="demo91-w2">
+              <input type="checkbox" id="demo91-w2">
+              <span class="rm-week">W02</span>
+              <span class="rm-body"><span class="rm-task">刚体运动学</span><span class="rm-verify">验收：2 连杆逆解末端误差 &lt;1 mm</span></span>
+            </label>
+          </li>
+          <li class="rm-item">
+            <label class="rm-check" for="demo91-w3">
+              <input type="checkbox" id="demo91-w3">
+              <span class="rm-week">W03</span>
+              <span class="rm-body"><span class="rm-task">静力学与选型</span><span class="rm-verify">验收：膝力矩曲线与 RNEA 差 &lt;5%</span></span>
+            </label>
+          </li>
+          <li class="rm-item is-gate">
+            <label class="rm-check" for="demo91-w4">
+              <input type="checkbox" id="demo91-w4">
+              <span class="rm-week">W04</span>
+              <span class="rm-body"><span class="rm-task">单关节台架 · 门 1</span><span class="rm-verify">验收：1 Hz 力矩 RMSE &lt;0.5 N·m，堵转 10 s 不降额</span></span>
+            </label>
+          </li>
+          <li class="rm-item">
+            <label class="rm-check" for="demo91-w5">
+              <input type="checkbox" id="demo91-w5">
+              <span class="rm-week">W05</span>
+              <span class="rm-body"><span class="rm-task">实时与总线</span><span class="rm-verify">验收：p99.9 抖动 &lt;50 µs，丢帧 &lt;10⁻⁵</span></span>
+            </label>
+          </li>
+          <li class="rm-item">
+            <label class="rm-check" for="demo91-w6">
+              <input type="checkbox" id="demo91-w6">
+              <span class="rm-week">W06</span>
+              <span class="rm-body"><span class="rm-task">浮基动力学</span><span class="rm-verify">验收：M 对称正定，与手算差 &lt;1%</span></span>
+            </label>
+          </li>
+          <li class="rm-item">
+            <label class="rm-check" for="demo91-w7">
+              <input type="checkbox" id="demo91-w7">
+              <span class="rm-week">W07</span>
+              <span class="rm-body"><span class="rm-task">关节 PD 与站立</span><span class="rm-verify">验收：原地站 10 s，跟踪误差 &lt;2°</span></span>
+            </label>
+          </li>
+          <li class="rm-item is-gate">
+            <label class="rm-check" for="demo91-w8">
+              <input type="checkbox" id="demo91-w8">
+              <span class="rm-week">W08</span>
+              <span class="rm-body"><span class="rm-task">单腿弹跳 · 门 2</span><span class="rm-verify">验收：连续 100 跳，高度方差 &lt;10%</span></span>
+            </label>
+          </li>
+          <li class="rm-item">
+            <label class="rm-check" for="demo91-w9">
+              <input type="checkbox" id="demo91-w9">
+              <span class="rm-week">W09</span>
+              <span class="rm-body"><span class="rm-task">LIPM 与 ZMP</span><span class="rm-verify">验收：ZMP 跟踪误差 &lt;1 cm</span></span>
+            </label>
+          </li>
+          <li class="rm-item">
+            <label class="rm-check" for="demo91-w10">
+              <input type="checkbox" id="demo91-w10">
+              <span class="rm-week">W10</span>
+              <span class="rm-body"><span class="rm-task">凸 MPC</span><span class="rm-verify">验收：单次求解 &lt;5 ms，1 m/s 走 10 m</span></span>
+            </label>
+          </li>
+          <li class="rm-item">
+            <label class="rm-check" for="demo91-w11">
+              <input type="checkbox" id="demo91-w11">
+              <span class="rm-week">W11</span>
+              <span class="rm-body"><span class="rm-task">强化学习</span><span class="rm-verify">验收：sim2sim 直行 10 m，推理 &lt;2 ms</span></span>
+            </label>
+          </li>
+          <li class="rm-item is-gate">
+            <label class="rm-check" for="demo91-w12">
+              <input type="checkbox" id="demo91-w12">
+              <span class="rm-week">W12</span>
+              <span class="rm-body"><span class="rm-task">双足原地平衡 · 门 3</span><span class="rm-verify">验收：60 s 不摔，50 N 侧推 1 s 恢复</span></span>
+            </label>
+          </li>
+        </ol>
+        <p class="rm-all" data-role="all" hidden>12 周全部完成——这不是运气，是 87 小时和 12 次验收换来的。现在你有一台能站 60 s 的机器和一摞能复现的记录；下一步是 6 个月阶段的平面行走。</p>
+        <p class="rm-status" data-role="status" role="status" aria-live="polite"></p>
+      </div>
+    </div>
+    <div class="demo-controls">
+      <button type="button" id="demo91-reset" data-role="reset">重置进度</button>
+      <p class="rm-hint">进度存在本机浏览器，换设备不同步；隐私模式下只在本次会话有效。</p>
+    </div>
+    <dl class="demo-readout">
+      <div><dt>已完成</dt><dd><span data-readout="done">0</span><small>周</small></dd></div>
+      <div><dt>累计投入</dt><dd><span data-readout="hours">0</span><small>h</small></dd></div>
+      <div><dt>距第 12 周</dt><dd><span data-readout="left">12</span><small>周</small></dd></div>
+    </dl>
+    <p class="rm-note"><strong>「第 N/12 周」里的 N 是已勾选的周数，不是日历周。</strong>刷新页面后进度从本机存储恢复；存储不可用时（隐私模式、配额已满）自动退回本次会话，页面上不会报错。清单只记录进度，不替代上一张表的验收。</p>
+  </section>
+
+  <h2>6 个月与 12 个月：里程碑与失效信号</h2>
+  <p>这一节解决什么问题：把 12 周之后的两段路排出可测的里程碑，并给出一张「看到什么现象就修哪一层」的对照表。</p>
+
+  <p>6 个月按每周 8–10 小时算，累计约 210–260 小时，目标是平面行走、3D 行走和一次完整的抗扰测试。三个里程碑都能测：0.5 m/s 直行 10 m，五次全过；带 90° 转向走 20 m，8/10；状态估计 10 m 往返的闭环误差小于行程的 2%。第三个最容易被跳过——很多人用动捕或外部视觉喂位置，真机一离开实验室就失效，而这一步恰好是 12 个月整机的前置条件。</p>
+
+  <p>12 个月做整机：20–23 个自由度、连续行走 30 min 不触发保护、0.15 m 台阶 8/10、60 N 侧推不摔、抓 0.5 kg 盒子 18/20。这里的数字不是门槛高低，是可复现性：20 次里成 18 次，单次成功率 90%，但 95% 置信下界只有 0.70。报告写下界，别写「90%」，算法在后文。</p>
+
+  <p>失效信号比里程碑有用。里程碑告诉你走到哪，失效信号告诉你该往回走多远。表 9.2 的六行覆盖了大部分「走不起来」：每一行指向一层，而不是一个参数。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 9.2 失效信号对照：现象、原因与该回退的章节</caption>
+      <thead>
+        <tr><th>现象</th><th>说明什么</th><th>先修哪一层</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>每次都在同一相位摔</td><td>接触时序或落脚点错，不是增益问题</td><td>06 章：步态相位与落脚点</td></tr>
+        <tr><td>必须把 K<sub>p</sub> 提到 2 倍才站得住</td><td>力矩带宽不足，或控制环延迟过大</td><td>03/04 章：电流环与 1 kHz 抖动</td></tr>
+        <tr><td>仿真 100%，真机第一次就倒</td><td>观测里有真机拿不到的量，或延迟未建模</td><td>07 章：观测设计与 DR 区间</td></tr>
+        <tr><td>回报上升，真机动作高频抖</td><td>奖励黑客，或动作率惩罚不足</td><td>07 章：奖励分解与动作平滑</td></tr>
+        <tr><td>每次重启后前 3 s 必摔</td><td>姿态零偏未收敛，估计初值错</td><td>08 章：IMU 零偏与接触观测</td></tr>
+        <tr><td>走 8 min 后膝力矩掉 30%</td><td>温升使力矩常数下降，驱动器降额</td><td>03 章：热限与连续力矩</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>项目阶梯：七级，一级一个门</h2>
+  <p>这一节解决什么问题：把「会走路」拆成七级，每级给出目标、验收、所需知识与最常见的失败。</p>
+
+  <p>阶梯的用法是只向上走一级。同时做两级，验收会混在一起：机器人摔了，你分不清是落脚点错还是关节力矩不够。每一级的验收都写成可数的形式——次数、毫秒、厘米、百分比，这样「过了」和「没过」不靠感觉。</p>
+
+  <p>七级里最容易被低估的是 L1 与 L6。L1 看起来只是接线，但它决定后面所有力控的上限；L6 看起来只是加个台阶，实际要把接触序列、MPC 重规划和状态估计同时改对，三者任意一个错，表现都是「上台阶时摔」。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 9.3 七级阶梯：目标、验收标准、所需知识与常见失败</caption>
+      <thead>
+        <tr><th>级别与目标</th><th>验收标准</th><th>所需知识</th><th>常见失败</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>L1 单关节台架</strong>：一个关节按指令输出力矩</td><td>1 Hz 正弦 RMSE &lt;0.5 N·m；阶跃超调 &lt;20%；堵转 10 s 不触温保</td><td>FOC、编码器、CAN、电流环</td><td>用位置环冒充力矩环；母线没预充，上电炸保险</td></tr>
+        <tr><td><strong>L2 单腿弹跳</strong>：一条 3 关节腿连续跳</td><td>连续 100 跳；顶点高度方差 &lt;10%；每跳都有腾空相</td><td>SLIP、触地检测、阻抗与力控</td><td>触地判定晚 20 ms，能量注入错相，越跳越歪</td></tr>
+        <tr><td><strong>L3 双足原地平衡</strong>：双脚站立抗扰</td><td>60 s 不摔；50 N 侧推 1 s 内恢复；最大倾角 &lt;5°</td><td>WBC、QP、摩擦锥、IMU 估计</td><td>只调 PD，不会在两个接触点之间分配力</td></tr>
+        <tr><td><strong>L4 平面行走</strong>：直行与转向</td><td>0.5 m/s 直行 10 m，5/5；90° 转向 20 m，8/10</td><td>LIPM/ZMP、落脚点、凸 MPC</td><td>步频与步长不匹配，越走越快直到摔</td></tr>
+        <tr><td><strong>L5 3D 行走</strong>：不平地面</td><td>5° 斜坡加 1 cm 随机起伏，20 m 走 8/10</td><td>地形估计、摆动腿轨迹、落脚点修正</td><td>抬脚高度固定 5 cm，遇 8 cm 障碍必绊</td></tr>
+        <tr><td><strong>L6 抗扰与台阶</strong>：外力与台阶</td><td>0.15 m 台阶 8/10；60 N 侧推不摔</td><td>接触序列、MPC 重规划、状态估计</td><td>上台阶仍按平地节拍走，ZMP 出支撑多边形</td></tr>
+        <tr><td><strong>L7 操作</strong>：抓取与搬运</td><td>0.5 kg 盒子 18/20；放置误差 &lt;2 cm</td><td>阻抗控制、抓取位姿、模仿学习</td><td>只做位置控制，接触瞬间力超限</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>预算与 BOM：三档钱各自买到什么</h2>
+  <p>这一节解决什么问题：说清三档预算的天花板在哪，以及 BOM 里哪些件必须买、哪些可以自己画。</p>
+
+  <p>5k 元以下：一个关节台架加一条 3 自由度单腿。准直驱模组 150–400 美元，驱动器 50–200 美元，加电源、铝型材和一块 MCU，会压到这条线附近。能做单关节力矩跟踪、10 kg 以内的单腿弹跳；做不了 60 kg 双足，因为膝要 88 N·m，而这一档的峰值只有 35 N·m 上下，缺口一半还多。</p>
+
+  <p>5k–30k 元：12 自由度、8–15 kg、0.6–1.0 m 的半尺寸双足。关节 60–90 N·m，CAN FD 总线，Jetson Orin Nano 或 NX。这一档能走完 L3 与 L4，做不了跑跳——跑跳要 3–5 倍峰值余量，而 60 N·m 的关节面对 90 N·m 的需求已经没有余量。</p>
+
+  <p>30k 元以上：20–23 自由度整机。买现成的 G1 起价约 1.35 万美元，自研同规格的物料成本通常更高，还没算 6 个月工时。这一档的关键不是钱，是 EtherCAT、双编码器与 100–360 N·m 的关节谱，它决定你能不能做 L5–L7。</p>
+
+  <p>买还是自研：自研关节能省 40–60% 的 BOM，但要多花 3–6 个月，而且难点不在加工，在标定——力矩常数随温度漂、背隙、摩擦模型，这三项决定力矩环的精度。第一个项目买模组，第二个项目自研一条腿，是最省时间的顺序。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 306" role="img" aria-labelledby="ch09-fig3-title ch09-fig3-desc">
+      <title id="ch09-fig3-title">三档预算对应的关节峰值力矩与整机需求</title>
+      <desc id="ch09-fig3-desc">纵轴为关节峰值力矩 0 到 360 牛米，横轴为三档整机预算。5 千元以下档约 35 牛米，5 千到 3 万元档约 90 牛米，3 万元以上档约 360 牛米。图中两条虚线标出 60 公斤机器人单腿支撑时膝的 88 牛米与踝的 59 牛米需求。</desc>
+      <line x1="80" y1="240.0" x2="560" y2="240.0" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="72.0" y="244.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">0</text>
+      <line x1="80" y1="188.6" x2="560" y2="188.6" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="72.0" y="192.6" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">100</text>
+      <line x1="80" y1="137.2" x2="560" y2="137.2" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="72.0" y="141.2" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">200</text>
+      <line x1="80" y1="85.8" x2="560" y2="85.8" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="72.0" y="89.8" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">300</text>
+      <line x1="80" y1="55.0" x2="560" y2="55.0" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="72.0" y="59.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">360</text>
+      <line x1="80" y1="194.8" x2="590" y2="194.8" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:5 4;stroke-opacity:.5"/>
+      <line x1="80" y1="209.7" x2="590" y2="209.7" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:5 4;stroke-opacity:.5"/>
+      <rect x="112" y="222.0" width="76" height="18.0" style="fill:var(--d1);fill-opacity:.86"/>
+      <text x="150.0" y="215.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink);">≈35</text>
+      <text x="150.0" y="258.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink);">&lt; ¥5,000</text>
+      <text x="150.0" y="276.0" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">台架 + 3 DoF 单腿</text>
+      <rect x="262" y="193.8" width="76" height="46.2" style="fill:var(--d1);fill-opacity:.86"/>
+      <text x="300.0" y="186.8" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink);">≈90</text>
+      <text x="300.0" y="258.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink);">¥5,000–30,000</text>
+      <text x="300.0" y="276.0" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">12 DoF 半尺寸双足</text>
+      <rect x="412" y="55.0" width="76" height="185.0" style="fill:var(--d1);fill-opacity:.86"/>
+      <text x="450.0" y="48.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink);">≈360</text>
+      <text x="450.0" y="258.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink);">¥30,000+</text>
+      <text x="450.0" y="276.0" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">20+ DoF 整机</text>
+      <line x1="80" y1="240" x2="560" y2="240" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="588.0" y="188.8" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--accent-3);">88 N·m · 膝</text>
+      <text x="588.0" y="205.7" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--accent-3);">59 N·m · 踝</text>
+      <text x="80.0" y="40.0" class="t-label" style="font-size:12px;fill:var(--muted-ink);">关节峰值力矩 / N·m</text>
+      <text x="560.0" y="296.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">整机预算</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 9.3</span>三档预算的关节峰值力矩，对照 60 kg 单腿支撑的膝 88 N·m 与踝 59 N·m 需求。
+      <span class="fig-note read-for">读者应看出：最左一档的 35 N·m 只有膝需求的 40%，连静态单腿支撑都不够；5k–30k 档刚好压在 88 N·m 线上，没有动态余量。</span>
+      <span class="fig-src">来源：作者绘制；力矩为量级估计，价格取 2026 年公开报价区间。</span>
+    </figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table class="t-bom">
+      <caption>表 9.4 BOM 的六项与判据（占比为量级估计）</caption>
+      <thead>
+        <tr><th>项目</th><th class="num">占 BOM</th><th>选型判据</th><th>最常见的错</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>关节（电机 + 减速器 + 编码器）</td><td class="num">40–60%</td><td>峰值 ≥1.5× 静力矩需求，连续 ≥0.5×；反射惯量 <span class="formula-inline">J<sub>m</sub>N<sup>2</sup></span></td><td>只看峰值不看连续，10 s 后热降额</td></tr>
+        <tr><td>驱动器</td><td class="num">8–15%</td><td>峰值相电流 ≥2×；支持 ≥1 kHz 指令</td><td>把 20 kHz PWM 当成 20 kHz 带宽</td></tr>
+        <tr><td>IMU 与力传感</td><td class="num">5–10%</td><td>零偏 ≤1 °/s；足端力 1 kHz 采样</td><td>用消费级 IMU 却不标定零偏</td></tr>
+        <tr><td>算力</td><td class="num">5–15%</td><td>策略单次 &lt;2 ms，留 30% 余量</td><td>用 x86 跑 1 kHz 却不装实时内核</td></tr>
+        <tr><td>电池与电源</td><td class="num">8–15%</td><td>0.5–0.9 kWh；持续 1C；预充与泄放齐全</td><td>忽略回馈，制动时母线过压</td></tr>
+        <tr><td>结构</td><td class="num">15–25%</td><td>关节额定力矩下变形 &lt;0.01 rad</td><td>CAD 默认密度 1000 kg/m³，惯量全错</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <aside class="callout callout--warning" data-reveal>
+    <p class="callout-kicker">警告 <span>Warning</span></p>
+    <p>预算的第一刀砍在关节，最后一刀才砍在算力。关节占 BOM 的 40–60%，把 Orin 换成 Nano 只省几百美元；把膝从 90 N·m 降到 60 N·m，60 kg 整机就站不住——它需要 88 N·m。先算力矩，再挑芯片。</p>
+  </aside>
+
+  <h2>软件栈：八个工具各占一个位置</h2>
+  <p>这一节解决什么问题：说清建模、仿真、求解、部署四段各用什么工具，以及它们之间的三个接口。</p>
+
+  <p>工具选型不看 star 数，看它站在哪一段。建模段要的是 O(n) 的动力学与解析导数，Pinocchio 是事实标准；仿真段要的是接触准与并行快，MuJoCo 负责准、Isaac Lab 负责快；求解段要的是把任务、约束与接触写成可实时求解的优化，Crocoddyl 做离线轨迹，OCS2 做在线 MPC 与 WBC；部署段要的是把网络变成不依赖训练框架的推理，ONNX 是通用答案。ROS 2 不在任何一段的核心，它负责 10–100 Hz 的工具链与日志。</p>
+
+  <p>ROS 2 为什么不放进 1 kHz 环：它的 executor 默认不是实时语义，响应时间要做调度分析才能给出上界。放进去可以工作，但你得先证明最坏情况；更省事的做法是控制环跑在独立进程或裸机上，ROS 2 只订阅状态、记录指令。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 9.5 软件栈的分工：每个工具只负责一段</caption>
+      <thead>
+        <tr><th>工具</th><th>位置</th><th>该学的那一部分</th><th>备注</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>ROS 2</td><td>通信与工具链，10–100 Hz</td><td>QoS、launch、rosbag 回放</td><td>不进 1 kHz 环</td></tr>
+        <tr><td>MuJoCo</td><td>仿真：接触与刚体</td><td>MJCF、接触参数、2 ms 默认步长</td><td>做 sim2sim 复核</td></tr>
+        <tr><td>Isaac Lab</td><td>GPU 并行仿真：训练</td><td>env 注册、域随机化、ONNX 导出</td><td>需要 RTX 显卡</td></tr>
+        <tr><td>Pinocchio</td><td>建模：刚体动力学</td><td>RNEA/CRBA、解析导数、URDF 校验</td><td>与手算对账</td></tr>
+        <tr><td>Crocoddyl</td><td>求解：DDP 与接触序列</td><td>动作模型、接触相、反馈增益</td><td>离线轨迹优化</td></tr>
+        <tr><td>OCS2</td><td>求解：MPC 加 WBC</td><td>切换系统、50 Hz MPC、400 Hz 跟踪</td><td>模型派主线</td></tr>
+        <tr><td>legged_gym</td><td>训练：最小完整骨架</td><td>奖励项、地形课程、域随机化</td><td>已迁 Isaac Lab</td></tr>
+        <tr><td>ONNX</td><td>部署：推理格式</td><td>导出、算子兼容、输入归一化</td><td>与 TorchScript 二选一</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>三个接口决定这套栈能不能拼起来。模型接口是 URDF 与 MJCF 同源：同一份 CAD 导出两遍，惯量误差要小于 5%，否则仿真里调好的 PD 增益到真机全是错的。状态接口是 1 kHz 的 (q, <span class="qdot">q</span>, τ, 接触标志)，时间戳必须来自同一个时钟。策略接口是 50 Hz 的观测与动作：观测只放真机拿得到的量，动作输出关节目标角，交给 PD 环。</p>
+
+  <p>选型有一个简单判据：能用模型写清楚的问题，先用 OCS2 那条线；写不清楚再用学习。反过来做的人，通常在第 3 个月发现自己在调奖励函数，却不知道该调成什么样。</p>
+
+  <h2>怎么读一篇论文，怎么算一次验收</h2>
+  <p>这一节解决什么问题：给一个四栏读法，让一篇论文在 20 分钟内被判断「能不能复现」；再给一个把「成了 17 次」变成可信区间的算法。</p>
+
+  <p>四栏是：问题、假设、证据、局限。问题指它到底修哪个失效模式，不是「提升性能」；假设指它默认模型对、传感器有、算力够；证据指平台、次数、有没有置信区间；局限指作者承认的，加上没承认但你能看出来的。</p>
+
+  <p>用四栏读 Rudin 2021：问题是腿足 RL 训练太慢；假设是仿真接触可信、并行环境足够多；证据是 4096 个环境、ANYmal 平地 4 min、崎岖 20 min，并有实机；局限是地形以程序化地形为主，教师策略用了特权信息。结论：训练流程能在 20 分钟内复现，野外鲁棒性不能。四栏写完，你就知道该复现哪一部分、不该期待哪一部分。</p>
+
+  <p>复现门槛三问：模型和代码公开吗？关键参数写了吗（频率、增益、延迟、随机化区间）？算力你有吗（4096 个并行环境约占 9 GB 显存）？三问里有两个否，这篇论文对你就是「读懂即可」，不要排进复现计划。</p>
+
+  <p>验收统计：20 次试验成功 17 次，单次成功率 85%，但这不是「85% 可靠」。Wilson 区间给出 95% 置信下的真值范围 [0.64, 0.95]——真值可能只有 64%。样本少的时候，区间比点估计诚实得多。</p>
+
+  <pre data-lang="python"><code><span class="tok-c"># 验收：20 次试验成功 17 次，报告要写下界而不是 85%</span>
+<span class="tok-k">import</span> math
+n, k, z = <span class="tok-n">20</span>, <span class="tok-n">17</span>, <span class="tok-n">1.96</span>      <span class="tok-c"># 试验次数、成功次数、95% 双侧分位</span>
+p = k / n                   <span class="tok-c"># 点估计 0.85</span>
+den = <span class="tok-n">1</span> + z*z/n             <span class="tok-c"># Wilson 分母，n 小的时候不可省</span>
+center = (p + z*z/(<span class="tok-n">2</span>*n)) / den
+half = z * math.sqrt(p*(<span class="tok-n">1</span>-p)/n + z*z/(<span class="tok-n">4</span>*n*n)) / den
+lo, hi = center - half, center + half
+<span class="tok-f">print</span>(f<span class="tok-s">"{k}/{n} 成功率 {p:.2f}，95% 区间 [{lo:.2f}, {hi:.2f}]"</span>)
+<span class="tok-c"># 输出：17/20 成功率 0.85，95% 区间 [0.64, 0.95]</span>
+<span class="tok-c"># 结论：真值可能只有 64%，「85% 可靠」是过度声明</span></code></pre>
+
+  <p>这段代码只做一件事：把 k/n 换成区间。输出应该写成「17/20，95% CI [0.64, 0.95]」，而不是「85% 成功率」。20 次是下限，不是标准；要区分 90% 与 95%，样本量要上百。</p>
+
+  <h2>三十篇论文：两篇奠基，一篇最近</h2>
+  <p>这一节解决什么问题：给出 30 篇按主线分组的论文，每篇一句话说清它解决了哪个具体问题。</p>
+
+  <p>不要从综述开始读。综述告诉你领域有多大，不告诉你一个方法在什么条件下失效。有效的顺序是：每条主线先读两篇奠基，它们定义了问题；再读一篇最近的，它定义了当前的做法；然后回到你正在做的那一级，挑一篇能直接对上的。</p>
+
+  <p>图 9.4 是这 30 篇的年份分布。1973–2014 年的 10 篇几乎全在实时、步态与优化；2015 年之后的 20 篇里，11 篇属于学习、感知与操作。两条线不是替代关系：2019 年之后最好的系统两边都用——优化那条线提供约束与可解释性，学习那条线提供模型写不出来的鲁棒性。</p>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 334" role="img" aria-labelledby="ch09-fig4-title ch09-fig4-desc">
+      <title id="ch09-fig4-title">30 篇经典论文的年份分布</title>
+      <desc id="ch09-fig4-desc">横轴为 1970 到 2025 年，每五年一档；纵轴为论文篇数 0 到 12。柱体按三条主线堆叠：建模与执行器 8 篇，步态、优化与实时 11 篇，学习、感知与操作 11 篇。2015 到 2019 年一档共 11 篇为最高，2020 到 2024 年一档 9 篇。</desc>
+      <line x1="100" y1="250.0" x2="566" y2="250.0" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="92.0" y="254.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">0</text>
+      <line x1="100" y1="221.7" x2="566" y2="221.7" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="92.0" y="225.7" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">2</text>
+      <line x1="100" y1="193.3" x2="566" y2="193.3" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="92.0" y="197.3" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">4</text>
+      <line x1="100" y1="165.0" x2="566" y2="165.0" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="92.0" y="169.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">6</text>
+      <line x1="100" y1="136.7" x2="566" y2="136.7" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="92.0" y="140.7" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">8</text>
+      <line x1="100" y1="108.3" x2="566" y2="108.3" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="92.0" y="112.3" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">10</text>
+      <line x1="100" y1="80.0" x2="566" y2="80.0" style="stroke:var(--line);stroke-width:.5"/>
+      <text x="92.0" y="84.0" class="t-mono" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">12</text>
+      <rect x="103.0" y="235.8" width="32.8" height="14.2" style="fill:var(--d1)"/>
+      <text x="119.4" y="230.8" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">1</text>
+      <line x1="119.4" y1="250" x2="119.4" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="119.4" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">1970</text>
+      <line x1="158.2" y1="250" x2="158.2" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="158.2" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">1975</text>
+      <line x1="197.1" y1="250" x2="197.1" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="197.1" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">1980</text>
+      <rect x="219.5" y="235.8" width="32.8" height="14.2" style="fill:var(--d5)"/>
+      <text x="235.9" y="230.8" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">1</text>
+      <line x1="235.9" y1="250" x2="235.9" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="235.9" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">1985</text>
+      <rect x="258.3" y="235.8" width="32.8" height="14.2" style="fill:var(--d1)"/>
+      <text x="274.8" y="230.8" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">1</text>
+      <line x1="274.8" y1="250" x2="274.8" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="274.8" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">1990</text>
+      <rect x="297.2" y="221.7" width="32.8" height="28.3" style="fill:var(--d5)"/>
+      <text x="313.6" y="216.7" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">2</text>
+      <line x1="313.6" y1="250" x2="313.6" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="313.6" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">1995</text>
+      <rect x="336.0" y="221.7" width="32.8" height="28.3" style="fill:var(--d1)"/>
+      <text x="352.4" y="216.7" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">2</text>
+      <line x1="352.4" y1="250" x2="352.4" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="352.4" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">2000</text>
+      <rect x="374.8" y="235.8" width="32.8" height="14.2" style="fill:var(--d1)"/>
+      <text x="391.2" y="230.8" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">1</text>
+      <line x1="391.2" y1="250" x2="391.2" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="391.2" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">2005</text>
+      <rect x="413.7" y="221.7" width="32.8" height="14.2" style="fill:var(--d1)"/>
+      <rect x="413.7" y="235.8" width="32.8" height="14.2" style="fill:var(--d5)"/>
+      <text x="430.1" y="216.7" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">2</text>
+      <line x1="430.1" y1="250" x2="430.1" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="430.1" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">2010</text>
+      <rect x="452.5" y="94.2" width="32.8" height="56.7" style="fill:var(--d3)"/>
+      <rect x="452.5" y="150.8" width="32.8" height="56.7" style="fill:var(--d1)"/>
+      <rect x="452.5" y="207.5" width="32.8" height="42.5" style="fill:var(--d5)"/>
+      <text x="468.9" y="89.2" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">11</text>
+      <line x1="468.9" y1="250" x2="468.9" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="468.9" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">2015</text>
+      <rect x="491.3" y="122.5" width="32.8" height="99.2" style="fill:var(--d3)"/>
+      <rect x="491.3" y="221.7" width="32.8" height="14.2" style="fill:var(--d1)"/>
+      <rect x="491.3" y="235.8" width="32.8" height="14.2" style="fill:var(--d5)"/>
+      <text x="507.8" y="117.5" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--ink-2);">9</text>
+      <line x1="507.8" y1="250" x2="507.8" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="507.8" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">2020</text>
+      <line x1="546.6" y1="250" x2="546.6" y2="254" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="546.6" y="268.0" class="t-mono" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">2025</text>
+      <line x1="100" y1="250" x2="566" y2="250" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="566.0" y="306.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">年代 / 五年一档</text>
+      <text x="100.0" y="56.0" class="t-label" style="font-size:12px;fill:var(--muted-ink);">篇数</text>
+      <path d="M333.0 66 L333.0 60 L410.7 60 L410.7 66" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <text x="371.8" y="54.0" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">ZMP 与预览</text>
+      <path d="M410.7 66 L410.7 60 L465.0 60 L465.0 66" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <text x="437.9" y="54.0" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">凸优化</text>
+      <path d="M465.0 66 L465.0 60 L534.9 60 L534.9 66" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <text x="500.0" y="54.0" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--muted-ink);">并行 RL</text>
+      <rect x="100.0" y="310" width="11" height="11" style="fill:var(--d5)"/>
+      <text x="116.0" y="319.5" class="t-label" style="font-size:12px;fill:var(--muted-ink);">建模与执行器 8 篇</text>
+      <rect x="243.8" y="310" width="11" height="11" style="fill:var(--d1)"/>
+      <text x="259.8" y="319.5" class="t-label" style="font-size:12px;fill:var(--muted-ink);">步态、优化与实时 11 篇</text>
+      <rect x="418.2" y="310" width="11" height="11" style="fill:var(--d3)"/>
+      <text x="434.2" y="319.5" class="t-label" style="font-size:12px;fill:var(--muted-ink);">学习、感知与操作 11 篇</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 9.4</span>30 篇论文的年份分布：2015–2019 年五年内 11 篇，超过之前四十年的总和。
+      <span class="fig-note read-for">读者应看出：2003–2010 年的柱体几乎全是步态与优化，2015 年之后学习与感知（青灰）占了 11 篇；2015 年之后三条主线同时有论文，不再是单线推进。</span>
+      <span class="fig-src">来源：作者绘制，按本文 30 篇的首次发表年份分档。</span>
+    </figcaption>
+  </figure>
+
+  <p>下面按三组列出。编号连续，方便正文引用；组内按年份升序。</p>
+
+  <h3>建模、执行器与机械</h3>
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[01]</span>
+      <div>
+        <p class="paper-title">Legged Robots That Balance</p>
+        <p class="paper-meta">Marc Raibert · MIT Press, 1986 · 用单腿弹跳机证明动态平衡可以拆成三条解耦规则：腿长、姿态、速度</p>
+      </div>
+      <a class="paper-link" href="https://underactuated.mit.edu/simple_legs.html">教材章节 ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[02]</span>
+      <div>
+        <p class="paper-title">Series Elastic Actuators</p>
+        <p class="paper-meta">Gill Pratt, Matthew Williamson · IROS, 1995 · 把弹簧串进执行器，用变形测力，力控从电流估算变成直接测量</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/IROS.1995.525827">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[03]</span>
+      <div>
+        <p class="paper-title">Inertial Properties in Robotic Manipulation: An Object-Level Framework</p>
+        <p class="paper-meta">Oussama Khatib · IJRR, 1995 · 用操作空间惯量说明末端惯量如何决定力控品质</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1177/027836499501400103">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[04]</span>
+      <div>
+        <p class="paper-title">MuJoCo: A Physics Engine for Model-Based Control</p>
+        <p class="paper-meta">Emanuel Todorov, Tom Erez, Yuval Tassa · IROS, 2012 · 接触建模与优化友好求解，成为 MPC 与 RL 的共同后端</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/IROS.2012.6386109">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[05]</span>
+      <div>
+        <p class="paper-title">Design Principles for Energy-Efficient Legged Locomotion and Implementation on the MIT Cheetah Robot</p>
+        <p class="paper-meta">Sangbae Seok 等 · IEEE/ASME T-Mech, 2015 · 高扭矩密度电机、再生驱动、低损耗传动、低腿惯量四条设计原则</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/TMECH.2014.2339013">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[06]</span>
+      <div>
+        <p class="paper-title">Proprioceptive Actuator Design in the MIT Cheetah</p>
+        <p class="paper-meta">Patrick Wensing 等 · IEEE T-RO, 2017 · 低减速比加电流力控的本体感知执行器，给出冲击缓解指标</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/TRO.2016.2640183">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[07]</span>
+      <div>
+        <p class="paper-title">MIT Cheetah 3: Design and Control of a Robust, Dynamic Quadruped Robot</p>
+        <p class="paper-meta">Gerardo Bledt 等 · IROS, 2018 · 本体感知执行器加模块化控制器，不用外部传感器盲爬楼梯，Trot 的 CoT 低到 0.45</p>
+      </div>
+      <a class="paper-link" href="https://dspace.mit.edu/handle/1721.1/126619">PDF ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[08]</span>
+      <div>
+        <p class="paper-title">The MIT Humanoid Robot: Design, Motion Planning, and Control For Acrobatic Behaviors</p>
+        <p class="paper-meta">Matthew Chignoli 等 · arXiv, 2021 · 把执行器的力矩—速度—功率极限直接写进规划与仿真</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2104.09025">arXiv ↗</a>
+    </li>
+  </ol>
+
+  <h3>步态、优化与实时</h3>
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[09]</span>
+      <div>
+        <p class="paper-title">Scheduling Algorithms for Multiprogramming in a Hard-Real-Time Environment</p>
+        <p class="paper-meta">C. L. Liu, James Layland · JACM, 1973 · 提出 RM/EDF 与 69.3% 利用率上界，实时调度的起点</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1145/321738.321743">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[10]</span>
+      <div>
+        <p class="paper-title">Priority Inheritance Protocols: An Approach to Real-Time Synchronization</p>
+        <p class="paper-meta">Lui Sha 等 · IEEE Trans. Computers, 1990 · 优先级继承把阻塞上界压到一个临界区</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/12.57058">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[11]</span>
+      <div>
+        <p class="paper-title">Biped Walking Pattern Generation by Using Preview Control of Zero-Moment Point</p>
+        <p class="paper-meta">Shuuji Kajita 等 · ICRA, 2003 · 把 ZMP 跟踪写成带预览的 LQR，工业级 ZMP 步态的起点</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/ROBOT.2003.1241826">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[12]</span>
+      <div>
+        <p class="paper-title">Zero-Moment Point — Thirty Five Years of Its Life</p>
+        <p class="paper-meta">Miomir Vukobratović, Branislav Borovac · IJHR, 2004 · 系统澄清 ZMP 的定义与常见误用</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1142/S0219843604000083">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[13]</span>
+      <div>
+        <p class="paper-title">Capture Point: A Step toward Humanoid Push Recovery</p>
+        <p class="paper-meta">Jerry Pratt 等 · IEEE-RAS Humanoids, 2006 · 定义「踩哪里能停住」，把推恢复变成几何判据</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/ICHR.2006.321385">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[14]</span>
+      <div>
+        <p class="paper-title">Balancing Experiments on a Torque-Controlled Humanoid with Hierarchical Inverse Dynamics</p>
+        <p class="paper-meta">Alexander Herzog 等 · IROS, 2014 · 首次在真机上把层级 QP 跑进 1 kHz 力矩环，14 自由度平均 0.9 ms</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1305.2042">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[15]</span>
+      <div>
+        <p class="paper-title">Optimization-Based Locomotion Planning, Estimation, and Control Design for the Atlas Humanoid Robot</p>
+        <p class="paper-meta">Scott Kuindersma 等 · Autonomous Robots, 2016 · Atlas 的分层优化全栈：规划、MPC、WBC、估计如何接起来</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1007/s10514-015-9479-3">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[16]</span>
+      <div>
+        <p class="paper-title">Dynamic Locomotion in the MIT Cheetah 3 Through Convex Model-Predictive Control</p>
+        <p class="paper-meta">Jared Di Carlo 等 · IROS, 2018 · 单刚体凸 MPC 的工程样板：0.5 s 视界、单次 &lt;1 ms、20–30 Hz 重规划</p>
+      </div>
+      <a class="paper-link" href="https://hdl.handle.net/1721.1/138000">PDF ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[17]</span>
+      <div>
+        <p class="paper-title">Highly Dynamic Quadruped Locomotion via Whole-Body Impulse Control and MPC</p>
+        <p class="paper-meta">Donghyun Kim 等 · arXiv, 2019 · 明确给出 40 kHz 关节环、0.5 kHz WBC、40 Hz MPC 的三层分工</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1909.06586">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[18]</span>
+      <div>
+        <p class="paper-title">Mini Cheetah: A Platform for Pushing the Limits of Dynamic Quadruped Control</p>
+        <p class="paper-meta">Benjamin Katz 等 · ICRA, 2019 · 9 kg 模块化反驱关节平台，验证准直驱路线</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/ICRA.2019.8793865">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[19]</span>
+      <div>
+        <p class="paper-title">An Open Torque-Controlled Modular Robot Architecture for Legged Locomotion Research</p>
+        <p class="paper-meta">Felix Grimminger 等 · IEEE RA-L, 2020 · 开源力矩控制执行器：10 kHz FOC 加 1 kHz 主环的完整软硬件栈</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1910.00093">arXiv ↗</a>
+    </li>
+  </ol>
+
+  <h3>学习、感知与操作</h3>
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[20]</span>
+      <div>
+        <p class="paper-title">On-Manifold Preintegration for Real-Time Visual-Inertial Odometry</p>
+        <p class="paper-meta">Christian Forster 等 · arXiv 2015（后发表于 T-RO）· 在流形上预积分并推导零偏雅可比，成为 VIO 的标准组件</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1512.02363">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[21]</span>
+      <div>
+        <p class="paper-title">Proximal Policy Optimization Algorithms</p>
+        <p class="paper-meta">John Schulman 等 · arXiv, 2017 · 用比率裁剪把「别更新太猛」变成一阶目标，腿足 RL 的默认算法</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1707.06347">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[22]</span>
+      <div>
+        <p class="paper-title">Contact-Aided Invariant Extended Kalman Filtering for Legged Robot State Estimation</p>
+        <p class="paper-meta">Ross Hartley 等 · RSS, 2018 · 把接触当观测、用不变 EKF 保证可观测性一致</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1805.10410">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[23]</span>
+      <div>
+        <p class="paper-title">Learning Agile and Dynamic Motor Skills for Legged Robots</p>
+        <p class="paper-meta">Jemin Hwangbo 等 · Science Robotics, 2019 · 仿真训练加零样本实机迁移到 ANYmal，学习式腿足控制进入主流</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1901.08652">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[24]</span>
+      <div>
+        <p class="paper-title">Learning Quadrupedal Locomotion over Challenging Terrain</p>
+        <p class="paper-meta">Joonho Lee 等 · Science Robotics, 2020 · 用本体感知历史做隐式地形估计，替掉手写状态机</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2010.11251">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[25]</span>
+      <div>
+        <p class="paper-title">Learning to Walk in Minutes Using Massively Parallel Deep Reinforcement Learning</p>
+        <p class="paper-meta">Nikita Rudin 等 · CoRL, 2021 · 4096 并行环境把训练压到 4–20 分钟，legged_gym 的原型论文</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2109.11978">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[26]</span>
+      <div>
+        <p class="paper-title">RMA: Rapid Motor Adaptation for Legged Robots</p>
+        <p class="paper-meta">Ashish Kumar 等 · RSS, 2021 · 特权信息编码成隐变量，50 步历史回归，10 Hz 自适应加 100 Hz 策略</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2107.04034">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[27]</span>
+      <div>
+        <p class="paper-title">Learning Robust Perceptive Locomotion for Quadrupedal Robots in the Wild</p>
+        <p class="paper-meta">Takahiro Miki 等 · Science Robotics, 2022 · 教师—学生蒸馏，本体感知学生网络让 ANYmal 走雪地、流水与废墟</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2201.08117">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[28]</span>
+      <div>
+        <p class="paper-title">Real-World Humanoid Locomotion with Reinforcement Learning</p>
+        <p class="paper-meta">Ilija Radosavovic 等 · arXiv, 2023 · 因果 Transformer 吃观测—动作历史做上下文自适应，人形实机不再依赖状态估计</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2303.03381">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[29]</span>
+      <div>
+        <p class="paper-title">Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware</p>
+        <p class="paper-meta">Tony Zhao 等 · RSS, 2023 · ACT：动作分块加 CVAE，50 条示教做到 80–90% 成功率</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2304.13705">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[30]</span>
+      <div>
+        <p class="paper-title">π0: A Vision-Language-Action Flow Model for General Robot Control</p>
+        <p class="paper-meta">Kevin Black 等 · arXiv 2024（RSS 2025）· 3.3B VLM 加 flow matching 动作专家，50 Hz 连续控制</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2410.24164">arXiv ↗</a>
+    </li>
+  </ol>
+
+  <h2>十五个开源项目：按层挑</h2>
+  <p>这一节解决什么问题：给出 15 个仓库，按「你想学哪一层」而不是 star 数来选。</p>
+
+  <p>选仓库的判断标准只有一条：它能不能让你在本地跑出一个可验收的结果。MuJoCo 能在十分钟内让你看见接触，OCS2 要编译半天，但能看到 50 Hz 的 MPC 真的在滚动。先想清楚这周要验收什么，再决定装哪一个。</p>
+
+  <div class="table-wrap">
+    <table class="t-oss">
+      <caption>表 9.6 15 个开源项目：语言、许可证与适用人群</caption>
+      <thead>
+        <tr><th>项目</th><th>语言</th><th>许可证</th><th>适合谁</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><a href="https://github.com/google-deepmind/mujoco">MuJoCo</a></td><td>C/C++，Python 绑定</td><td>Apache-2.0</td><td>第 1 周就装：学 MJCF、接触参数与 2 ms 步长</td></tr>
+        <tr><td><a href="https://github.com/google-deepmind/mujoco_menagerie">MuJoCo Menagerie</a></td><td>XML（MJCF）</td><td>Apache-2.0<span class="nb">（按模型）</span></td><td>学惯量、限位与接触参数怎么从 CAD 来</td></tr>
+        <tr><td><a href="https://github.com/isaac-sim/IsaacLab">Isaac Lab</a></td><td>Python</td><td>BSD-3-Clause</td><td>第 11 周：学并行训练、域随机化、ONNX 导出</td></tr>
+        <tr><td><a href="https://github.com/leggedrobotics/legged_gym">legged_gym</a></td><td>Python</td><td>BSD-3-Clause</td><td>读最小 RL 闭环：奖励、课程、执行器网络</td></tr>
+        <tr><td><a href="https://github.com/unitreerobotics/unitree_rl_gym">unitree_rl_gym</a></td><td>Python</td><td>BSD-3-Clause</td><td>要跑 G1/H1 全链路：训练到 MuJoCo 再到真机</td></tr>
+        <tr><td><a href="https://github.com/stack-of-tasks/pinocchio">Pinocchio</a></td><td>C++ / Python</td><td>BSD-2-Clause</td><td>第 6 周：学 RNEA/CRBA，与手算对账</td></tr>
+        <tr><td><a href="https://github.com/loco-3d/crocoddyl">Crocoddyl</a></td><td>C++ / Python</td><td>BSD-3-Clause</td><td>学 DDP、接触序列与反馈增益</td></tr>
+        <tr><td><a href="https://github.com/leggedrobotics/ocs2">OCS2</a></td><td>C++</td><td>BSD-3-Clause</td><td>第 10 周：学实时 MPC 与 400 Hz 跟踪</td></tr>
+        <tr><td><a href="https://github.com/stack-of-tasks/tsid">TSID</a></td><td>C++ / Python</td><td>BSD-2-Clause</td><td>学任务空间逆动力学与接触力 QP</td></tr>
+        <tr><td><a href="https://github.com/osqp/osqp">OSQP</a></td><td>C</td><td>Apache-2.0</td><td>学 QP 求解器：热启动、不可行诊断</td></tr>
+        <tr><td><a href="https://github.com/simplefoc/Arduino-FOC">SimpleFOC</a></td><td>C++（Arduino）</td><td>MIT</td><td>第 4 周：FOC、SVPWM 的最小实现</td></tr>
+        <tr><td><a href="https://github.com/mjbots/moteus">moteus</a></td><td>C++（固件）</td><td>Apache-2.0</td><td>学 15–30 kHz 控制环与 CAN FD 寄存器协议</td></tr>
+        <tr><td><a href="https://github.com/OpenEtherCATsociety/SOEM">SOEM</a></td><td>C</td><td>GPL-3.0 或商业双许可</td><td>学 EtherCAT 主站与分布式时钟；商用先看许可</td></tr>
+        <tr><td><a href="https://github.com/rpng/open_vins">OpenVINS</a></td><td>C++</td><td>GPL-3.0</td><td>第 8 章后：学 MSCKF 与 IMU 预积分落地</td></tr>
+        <tr><td><a href="https://github.com/loongOpen/OpenLoong-Dyn-Control">OpenLoong-Dyn-Control</a></td><td>C++</td><td>Apache-2.0</td><td>中文可读的 MPC+WBC，MuJoCo 里直接跑行走</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="small">许可证按各仓库根目录的 LICENSE 与仓库页标注（2026 年 11 月核对）。GPL 系（SOEM 的开源分支、OpenVINS）有传染性，闭源产品里用要先确认；fork 或二次分发前，以仓库当时的 LICENSE 为准。</p>
+
+  <h2>学习资源：书、课、竞赛</h2>
+  <p>这一节解决什么问题：给出三本书、三门课与两个竞赛入口，并说清每一样该在哪个阶段用。</p>
+
+  <p>教材三本，用法不同。Modern Robotics 适合第 1–3 周，把指数积、雅可比、逆解补上，免费预印本配代码库；Underactuated Robotics 适合第 8–10 周，LIPM、ZMP、捕获点与接触都在里面，notebook 可以直接跑；Springer Handbook of Robotics 是工具书，查定义与领域地图，不要通读。</p>
+
+  <p>课程与书有重叠，选一个跟完。MIT 6.832 就是 Underactuated 的课程版；Stanford CS223A 的运动学推导比书更密；ETH Robot Dynamics 补刚体动力学与浮基方程，第 6 周卡住时看它最有效。三门课同时开，结果通常是三门都没看完。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 9.7 学习资源与使用时机</caption>
+      <thead>
+        <tr><th>资源</th><th>类型</th><th>入口</th><th>什么时候用</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Modern Robotics（Lynch &amp; Park）</td><td>教材，免费预印本</td><td><a href="https://hades.mech.northwestern.edu/index.php/Modern_Robotics">教材页 ↗</a></td><td>第 1–3 周：指数积、雅可比、逆解</td></tr>
+        <tr><td>Underactuated Robotics（Tedrake）</td><td>教材加 notebook</td><td><a href="https://underactuated.mit.edu">underactuated.mit.edu ↗</a></td><td>第 8–10 周：LIPM、ZMP、接触</td></tr>
+        <tr><td>Springer Handbook of Robotics</td><td>工具书</td><td>—</td><td>查定义与领域地图，不通读</td></tr>
+        <tr><td>MIT 6.832</td><td>课程</td><td><a href="https://underactuated.mit.edu">课程页 ↗</a></td><td>与 Underactuated 同步，跟一门就够</td></tr>
+        <tr><td>Stanford CS223A</td><td>课程</td><td><a href="https://cs.stanford.edu/groups/manips/teaching/cs223a/">课程页 ↗</a></td><td>第 2 周：运动学推导更密</td></tr>
+        <tr><td>ETH Robot Dynamics</td><td>课程</td><td><a href="https://rsl.ethz.ch/education-students/lectures/robotdynamics.html">课程页 ↗</a></td><td>第 6 周：浮基动力学卡住时看</td></tr>
+        <tr><td>DARPA Robotics Challenge</td><td>竞赛（2015 已结束）</td><td><a href="https://www.darpa.mil/program/darpa-robotics-challenge">官方页 ↗</a></td><td>看决赛失败集锦，找失效模式</td></tr>
+        <tr><td>RoboCup Humanoid</td><td>竞赛</td><td>—</td><td>规则即验收标准；入口未核验，未给链接</td></tr>
+        <tr><td>ICRA / IROS / Humanoids</td><td>会议</td><td>—</td><td>追新；入门不要从会议论文读起</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="small">标「—」的三项没有可核验的稳定入口，这里不给链接。RoboCup 的规则文档每年随赛季更新，引用前要确认版本年份。</p>
+
+  <p>社区的价值在于拿到具体数值，而不是看演示视频。判断一个社区值不值得待，看它能不能回答「你的 1 kHz 环 p99.9 抖动多少」「这个关节堵转 10 s 温升几度」这类问题。ROS Discourse 的机器人板块、OpenLoong 的中文社区、各仓库的 GitHub Discussions 是三个能问到人的地方；Discord 群适合救急，不适合查资料，因为搜索结果留不下来。</p>
+
+  <h2>十条常见误区</h2>
+  <p>这一节解决什么问题：列出十条最常把新手拖住三个月的判断错误，每条给一句怎么避免。</p>
+
+  <ol class="misconceptions">
+    <li><strong>先学强化学习，再补动力学。</strong>策略不收敛时，你分不清是奖励写错、观测拿不到，还是关节根本给不出力矩。怎么避免：先做完第 4 周的台架，再打开训练脚本。</li>
+    <li><strong>用舵机搭双足。</strong>20 kg·cm 的舵机约 2 N·m，只有 12 kg 单腿支撑所需 18 N·m 的九分之一；换成 0.3 m 力臂，末端只剩 6.5 N。怎么避免：先算 <span class="formula-inline">τ = F · d</span>，再下单。</li>
+    <li><strong>以为仿真跑通就能上真机。</strong>5–20 ms 的估计延迟与地面摩擦从不写进方程，仿真里的 100% 到真机可以是 0%。怎么避免：先过 MuJoCo sim2sim，再加 20 ms 延迟与 ±5% 质量扰动复测。</li>
+    <li><strong>以为策略频率越高越稳。</strong>主流是 50 Hz 策略加 1 kHz PD，把策略提到 200 Hz 通常先炸在推理延迟与动作抖动上。怎么避免：先量端到端延迟，再谈频率。</li>
+    <li><strong>以为 ZMP 是稳定判据。</strong>ZMP 出支撑多边形不等于摔，能不能救看发散运动分量是否还能被下一步捕获。怎么避免：ZMP 与 DCM 画在同一张时间图上。</li>
+    <li><strong>以为减速比越大越省力。</strong>反射惯量 <span class="formula-inline">J<sub>m</sub>N<sup>2</sup></span>，N = 100 把转子惯量放大一万倍，反驱与抗冲击一起变差。怎么避免：腿用 6–12:1，臂再用谐波。</li>
+    <li><strong>以为编码器位数决定精度。</strong>19 bit 折算到关节侧是 0.0007°，而背隙 0.05° 是它的 70 倍。怎么避免：先量背隙与连杆柔度，再买编码器。</li>
+    <li><strong>以为域随机化越宽越鲁棒。</strong>摩擦开到 0.1–2.0 换来的是保守步态；覆盖真机分布即可。怎么避免：先做系统辨识量出真机区间，再按 ±20% 开。</li>
+    <li><strong>以为示教数据越多越好。</strong>ACT 用每任务 50 条、10–20 分钟就到 80–90%，瓶颈是一致性与时间对齐。怎么避免：先固定采集流程，再扩条数。</li>
+    <li><strong>以为买整机就能跳过底层。</strong>G1 起价约 1.35 万美元，但 1 kHz 环、急停链与关节标定仍要自己验。怎么避免：把前 4 周的计划原样跑一遍，只把「造」换成「测」。</li>
+  </ol>
+
+  <h2>术语表：30 条</h2>
+  <p>这一节解决什么问题：把全书 30 个术语压成一张中英对照表，回查时不用翻前八章。</p>
+
+  <p>释义只保留「一句话能说清」的部分；需要推导的，回到对应章节。缩写沿用全书约定，例如全身控制一律写 WBC，零矩点一律写 ZMP。</p>
+
+  <dl class="glossary">
+    <div><dt>自由度<span>Degree of Freedom, DoF</span></dt><dd>一个独立运动轴；整机 23–43 个，单腿 6 个。</dd></div>
+    <div><dt>欠驱动<span>Underactuated</span></dt><dd>输入数少于构型维数；浮动基的 6 个位姿自由度没有驱动器。</dd></div>
+    <div><dt>浮动基<span>Floating Base</span></dt><dd>躯干未固定，状态多 6 维，接触力成为外部输入。</dd></div>
+    <div><dt>零矩点<span>Zero-Moment Point, ZMP</span></dt><dd>地面反力合力矩水平分量为零的点，必须落在支撑多边形内才有意义。</dd></div>
+    <div><dt>压力中心<span>Center of Pressure, CoP</span></dt><dd>地面压力分布的形心；没有惯性力时与 ZMP 重合。</dd></div>
+    <div><dt>线性倒立摆模型<span>Linear Inverted Pendulum Model, LIPM</span></dt><dd>质心等高、腿无质量的模型，自然频率 <span class="formula-inline">ω = √(g/z<sub>c</sub>)</span>。</dd></div>
+    <div><dt>发散运动分量<span>Divergent Component of Motion, DCM</span></dt><dd>LIPM 里自发发散的位置—速度组合 <span class="formula-inline">ξ = x + <span class="qdot">x</span>/ω</span>。</dd></div>
+    <div><dt>捕获点<span>Capture Point</span></dt><dd>让 DCM 停止发散的落点；脚踩上去，人就停在原地。</dd></div>
+    <div><dt>全身控制<span>Whole-Body Control, WBC</span></dt><dd>在动力学与接触约束下解多任务，输出关节力矩。</dd></div>
+    <div><dt>模型预测控制<span>Model Predictive Control, MPC</span></dt><dd>每个周期重解一个视界，只执行第一步。</dd></div>
+    <div><dt>二次规划<span>Quadratic Programming, QP</span></dt><dd>二次目标加线性约束；WBC 与 MPC 每毫秒解的就是它。</dd></div>
+    <div><dt>零空间<span>Null Space</span></dt><dd>不影响高优先级任务的子空间，冗余关节在这里干活。</dd></div>
+    <div><dt>任务空间<span>Task Space</span></dt><dd>末端或质心的笛卡尔空间。</dd></div>
+    <div><dt>雅可比矩阵<span>Jacobian</span></dt><dd>关节速度到任务速度的映射；转置就是力映射。</dd></div>
+    <div><dt>奇异位形<span>Singularity</span></dt><dd>雅可比降秩，该方向需要无穷大力矩，膝伸直时最典型。</dd></div>
+    <div><dt>反射惯量<span>Reflected Inertia</span></dt><dd>折算到输出侧的转子惯量，随减速比的平方增长。</dd></div>
+    <div><dt>准直驱<span>Quasi-Direct Drive, QDD</span></dt><dd>低减速比、高带宽、可反驱的执行器路线。</dd></div>
+    <div><dt>串联弹性执行器<span>Series Elastic Actuator, SEA</span></dt><dd>电机与负载之间串弹簧，用弹簧变形测力。</dd></div>
+    <div><dt>本体感知<span>Proprioception</span></dt><dd>仅凭编码器、IMU 与电流感知自身状态，不依赖外部传感器。</dd></div>
+    <div><dt>磁场定向控制<span>Field-Oriented Control, FOC</span></dt><dd>把三相电流变到 dq 轴，像直流电机一样控制转矩。</dd></div>
+    <div><dt>分布式时钟<span>Distributed Clock, DC</span></dt><dd>EtherCAT 的全局同步机制，节点间抖动小于 1 µs。</dd></div>
+    <div><dt>最坏执行时间<span>Worst-Case Execution Time, WCET</span></dt><dd>任务最坏路径的执行时间；实时性看它，不看平均值。</dd></div>
+    <div><dt>域随机化<span>Domain Randomization, DR</span></dt><dd>训练时随机化摩擦、质量与延迟，让策略见过一个分布而不是一个点。</dd></div>
+    <div><dt>近端策略优化<span>Proximal Policy Optimization, PPO</span></dt><dd>用概率比裁剪限制每次更新的步长，腿足 RL 的默认算法。</dd></div>
+    <div><dt>广义优势估计<span>Generalized Advantage Estimation, GAE</span></dt><dd>用 (γλ)<sup>l</sup> 加权叠 TD 残差，λ 调偏差与方差。</dd></div>
+    <div><dt>教师-学生蒸馏<span>Teacher-Student Distillation</span></dt><dd>教师用特权信息训练，学生只学真机拿得到的观测。</dd></div>
+    <div><dt>预积分<span>Preintegration</span></dt><dd>把两帧之间的 IMU 积分预先算成增量与协方差，省掉重复积分。</dd></div>
+    <div><dt>不变扩展卡尔曼滤波<span>Invariant EKF, IEKF</span></dt><dd>在群流形上定义误差的 EKF，可观测性更一致。</dd></div>
+    <div><dt>视觉-语言-动作模型<span>Vision-Language-Action, VLA</span></dt><dd>图像与语言直接映射到动作块，中间不写任务规划器。</dd></div>
+    <div><dt>运输代价<span>Cost of Transport, CoT</span></dt><dd>单位重量移动单位距离的能耗；人形行走在 0.2–0.6 量级。</dd></div>
+  </dl>
+
+  <section class="takeaways" data-takeaways aria-labelledby="ch09-takeaways">
+    <p class="kicker" id="ch09-takeaways">本章要点 <span>Takeaways</span></p>
+    <ol>
+      <li><strong>顺序由力矩决定，不由兴趣决定。</strong>60 kg 单腿支撑要 88 N·m 的膝力矩，35 N·m 的关节做不出来；先把第 4 周的台架做完，再谈控制与学习。</li>
+      <li><strong>12 周只有三个数要过。</strong>1 Hz 力矩 RMSE &lt;0.5 N·m、连续 100 跳高度方差 &lt;10%、双足 60 s 加 50 N 侧推；过不了就重复一周，别带着误差进整机。</li>
+      <li><strong>失效信号比里程碑值钱。</strong>同一相位摔查步态，K<sub>p</sub> 翻倍才站得住查带宽，仿真好真机倒查观测与延迟——分别指向 06、03/04、07 章。</li>
+      <li><strong>验收要报区间。</strong>20 次成 17 次是 85%，但 95% 置信下界只有 64%；论文与项目都按这个口径写，别人才敢信。</li>
+    </ol>
+  </section>
+
+  <a class="next-chapter" href="#ch-01">
+    <span class="next-kicker">回到第一章 · Start Over</span>
+    <span class="next-title">01｜全景：人形机器人到底难在哪</span>
+    <span class="next-arrow" aria-hidden="true">→</span>
+  </a>
+
+  <style>
+    #ch-09 > h2 { text-wrap: balance; }
+    /* 表 9.4：第一列括号里的「减速器 / 编码器」不能被拆词，断点只落在分隔符上 */
+    #ch-09 .t-bom td:first-child { width: 27%; word-break: keep-all; }
+    /* 表 9.6：备注列信息最多，压窄语言与许可列，把宽度让给它 */
+    #ch-09 .t-oss th:nth-child(1) { width: 22%; }
+    #ch-09 .t-oss th:nth-child(2) { width: 16%; }
+    #ch-09 .t-oss th:nth-child(3) { width: 19%; }
+    #ch-09 .t-oss th:nth-child(4) { width: 43%; }
+    #ch-09 .t-oss td, #ch-09 .t-oss th { padding-left: 10px; padding-right: 10px; }
+    #ch-09 .t-oss .nb { white-space: nowrap; }
+    #ch-09 .glossary > div { grid-template-columns: 182px minmax(0, 1fr); gap: 14px; }
+    #ch-09 .glossary dt span { font-size: 9.5px; line-height: 1.45; }
+    #ch-09 .demo-readout { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    #ch-09 .demo-stage {
+      display: block; padding: 18px 20px 20px; background-image: none;
+    }
+    #ch-09 .rm-wrap { display: block; width: 100%; max-width: 580px; margin: 0 auto; }
+    #ch-09 .rm-head {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-bottom: 10px;
+    }
+    #ch-09 .rm-count {
+      margin: 0; font-family: var(--mono); font-size: 13px; letter-spacing: .06em; color: var(--ink);
+    }
+    #ch-09 .rm-count span { font-size: 18px; color: var(--accent); }
+    #ch-09 .rm-next { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted-ink); }
+    #ch-09 .rm-progress {
+      position: relative; height: 6px; background: var(--paper-2); border: 1px solid var(--line);
+      border-radius: 3px; overflow: hidden;
+    }
+    #ch-09 .rm-fill {
+      display: block; height: 100%; width: 0; background: var(--accent);
+      transition: width .28s ease;
+    }
+    #ch-09 .rm-list {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px;
+      margin: 14px 0 0; padding: 0; list-style: none;
+    }
+    #ch-09 .rm-item { border-top: 1px solid var(--paper-line); }
+    #ch-09 .rm-check {
+      display: flex; gap: 8px; align-items: flex-start; padding: 7px 0; cursor: pointer;
+    }
+    #ch-09 .rm-check input {
+      flex: none; width: 15px; height: 15px; margin: 4px 0 0; accent-color: var(--accent); cursor: pointer;
+    }
+    #ch-09 .rm-week {
+      flex: none; padding-top: 4px; font-family: var(--mono); font-size: 10.5px;
+      letter-spacing: .04em; color: var(--muted-ink);
+    }
+    #ch-09 .rm-body { display: block; min-width: 0; }
+    #ch-09 .rm-task { display: block; font-size: 13.5px; line-height: 1.5; color: var(--ink); }
+    #ch-09 .rm-verify { display: block; font-size: 11.5px; line-height: 1.55; color: var(--muted-ink); }
+    #ch-09 .rm-item.is-gate .rm-task { font-weight: 600; }
+    #ch-09 .rm-item.is-done .rm-task { color: var(--accent); }
+    #ch-09 .rm-item.is-done .rm-verify { text-decoration: line-through; text-decoration-color: var(--line-2); }
+    #ch-09 .rm-all {
+      margin: 14px 0 0; padding: 10px 12px; border-left: 2px solid var(--accent);
+      background: var(--tint-green); font-size: 12.5px; line-height: 1.75; color: var(--ink-2);
+    }
+    #ch-09 .rm-status { margin: 6px 0 0; min-height: 1.2em; font-size: 11.5px; color: var(--muted-ink); }
+    #ch-09 .rm-hint {
+      flex: 1 1 240px; margin: 0; font-size: 11.5px; line-height: 1.6; color: var(--muted-ink);
+    }
+    #ch-09 .rm-note {
+      margin: 0; padding: 12px 16px 14px; border-top: 1px solid var(--line);
+      background: var(--paper-2); font-size: 12px; line-height: 1.8; color: var(--muted-ink);
+    }
+    #ch-09 .rm-note strong { color: var(--signal-ink); font-weight: 600; }
+    #ch-09 .demo-controls button {
+      padding: 5px 12px; border: 1px solid var(--line-2); background: var(--paper);
+      color: var(--ink); font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+      border-radius: 2px; cursor: pointer;
+    }
+    #ch-09 .demo-controls button:hover { border-color: var(--accent); color: var(--accent); }
+    #ch-09 .demo-controls button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+    #ch-09 .demo-controls button.is-armed { border-color: var(--signal); color: var(--signal-ink); }
+    #ch-09 .misconceptions { margin: 26px 0 38px; padding-left: 1.4em; }
+    #ch-09 .misconceptions li {
+      margin: 0 0 13px; padding-left: 4px; font-size: 15px; line-height: 1.8; color: var(--ink-2);
+    }
+    #ch-09 .misconceptions li strong { color: var(--ink); }
+    @media (max-width: 700px) {
+      #ch-09 .rm-list { grid-template-columns: 1fr; }
+      #ch-09 .rm-count span { font-size: 17px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #ch-09 .rm-fill { transition: none; }
+    }
+  </style>
+</section>

@@ -1,0 +1,765 @@
+<section class="chapter" id="ch-02" data-chapter="02">
+  <style>
+    /* 本章专用：全部选择器以 #ch-02 开头，避免污染其他章节 */
+    #ch-02 .fl-d1 { fill: var(--d1); }
+    #ch-02 .fl-d2 { fill: var(--d2); }
+    #ch-02 .fl-d5 { fill: var(--d5); }
+    #ch-02 .fl-surface { fill: var(--surface); }
+    #ch-02 .fl-band { fill: var(--paper-2); opacity: .6; }
+    #ch-02 .fl-night { fill: var(--ink); }
+    #ch-02 .sv-d1 { stroke: var(--d1); }
+    #ch-02 .sv-d2 { stroke: var(--d2); }
+    #ch-02 .sv-d4 { stroke: var(--d4); }
+    #ch-02 .sv-line { stroke: var(--line-2); }
+    #ch-02 .sv-soft { stroke: var(--line); }
+    #ch-02 .tx-ink { fill: var(--ink); }
+    #ch-02 .tx-muted { fill: var(--muted-ink); }
+    #ch-02 .tx-d1 { fill: var(--d1); }
+    #ch-02 .tx-d2 { fill: var(--accent-2-ink); }
+    #ch-02 .halo { paint-order: stroke; stroke: var(--surface); stroke-width: 3; stroke-linejoin: round; }
+    #ch-02 .ik-drag { cursor: grab; touch-action: none; }
+    #ch-02 .ik-drag:active { cursor: grabbing; }
+    #ch-02 .ik-drag:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 4px; }
+    #ch-02 .ik-reach { fill: none; stroke: var(--line-2); stroke-width: 1; stroke-dasharray: 5 6; }
+    #ch-02 .ik-iso { fill: none; stroke: var(--line); stroke-width: .8; }
+    #ch-02 .ik-thigh { stroke: var(--d1); stroke-width: 3.4; stroke-linecap: round; }
+    #ch-02 .ik-shank { stroke: var(--d2); stroke-width: 2.6; stroke-linecap: round; }
+    #ch-02 .ik-ghost { fill: none; stroke: var(--d4); stroke-width: 1.3; stroke-dasharray: 4 4; }
+    #ch-02 .ik-joint { fill: var(--surface); stroke: var(--ink); stroke-width: 1.4; }
+    #ch-02 .ik-handle { fill: var(--surface); stroke: var(--d1); stroke-width: 2; }
+    #ch-02 .ik-handle.is-snapped { stroke: var(--signal); fill: var(--tint-red); }
+    #ch-02 .ik-arc { fill: none; stroke: var(--d4); stroke-width: 1.2; }
+    #ch-02 .ik-dash { stroke: var(--line-2); stroke-width: .8; stroke-dasharray: 3 3; }
+    #ch-02 .table-wrap td, #ch-02 .table-wrap th { padding-left: 9px; padding-right: 9px; }
+    #ch-02 .formula--stack { white-space: normal; }
+    #ch-02 .formula--stack > span { display: block; }
+    #ch-02 .demo-controls button {
+      appearance: none; padding: 7px 12px; background: var(--paper-2);
+      border: 1px solid var(--line-2); border-radius: 2px;
+      font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
+      color: var(--ink-2); cursor: pointer;
+    }
+    #ch-02 .demo-controls button:hover { border-color: var(--accent); color: var(--accent); }
+    #ch-02 .demo-controls button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+    #ch-02 .demo-hint {
+      margin: 0; padding: 10px 16px 0; font-size: 12px; line-height: 1.7; color: var(--muted-ink);
+      background: var(--paper);
+    }
+    #ch-02 .demo-status {
+      margin: 0; padding: 8px 16px 14px; border-top: 0; background: var(--paper);
+      font-size: 12.5px; line-height: 1.75; color: var(--muted-ink);
+    }
+    #ch-02 .demo-status.is-warn { color: var(--signal-ink); }
+    #ch-02 .demo-readout { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    #ch-02 .demo-readout [data-cell="det"].is-warn { box-shadow: inset 3px 0 0 var(--signal); }
+    /* 图示只保留两档：常规图贴正文栏（539–1168），fig-wide 按 --bleed 出血 */
+    #ch-02 .figure:not(.fig-wide) { padding-left: 0; padding-right: 0; }
+    #ch-02 .figure:not(.fig-wide) figcaption { padding-left: 0; padding-right: 0; }
+  </style>
+
+  <header class="chapter-head">
+    <div class="ch-meta">
+      <span class="ch-num" aria-hidden="true">02</span>
+      <p class="kicker">Mechanical Design</p>
+    </div>
+    <h2>机械设计：自由度、连杆与关节模组</h2>
+    <p class="lede">一台人形机器人有几个关节、每条腿多长、膝盖里装什么减速器，这三个问题决定了后面所有控制算法能做什么。这一章把「站住」翻译成关节角、雅可比与力矩：读完你能对着一张简图，手算单腿支撑时髋、膝、踝各要出多大力，并判断一个关节模组能不能胜任。</p>
+  </header>
+
+  <h2>自由度账本：先决定关节数</h2>
+  <p>这一节解决一个问题：一台人形机器人该有多少个关节，多出来的关节是资源还是负担。</p>
+  <p>自由度（Degree of Freedom, DoF）是一个独立运动轴。刚体在空间里有 6 个自由度（3 个平移加 3 个旋转）；脚的位姿也是 6 个数（3 个位置加 3 个姿态），每加一个关节只多一个可控方向，所以要让脚停在任意位置、摆出任意姿态，一条腿需要 6 个关节。分配是这样来的：髋 3 个负责大腿指向与绕大腿的旋转（roll 外展内收、pitch 屈伸、yaw 内外旋），膝只能屈伸所以 1 个（pitch），踝 2 个补脚掌的俯仰与侧倾（pitch、roll），合计 6 个。少于 6 个不是不能走，而是脚掌的姿态要由腿长和躯干姿态间接决定，落地时没法主动贴合地面；H1 就是每腿 5 个（踝只有 pitch），脚掌侧倾靠被动柔度，落地贴合差一些。</p>
+  <p>手臂的起点同样是 6 个：肩 3、肘 1、腕 2。实际产品在这里分档：Unitree G1 的单臂 5 个，手腕少一个轴，手掌不能独立于小臂定姿；H1 单臂只有 4 个（肩 3 + 肘 1，没有腕轴）；H1-2 加到 7 个（肩 3 + 肘 1 + 腕 3），手腕能绕小臂转。腰 1–3 个，颈 2 个。把账加起来：G1 是 12（双腿）+ 1（腰）+ 10（双臂）= 23，H1 是 10（双腿，每腿 5）+ 1 + 8（每臂 4）= 19，H1-2 是 12（每腿 6）+ 1 + 14（每臂 7）= 27、70 kg。G1 比 H1 多 4 个：腿多 2（踝 2 对 1）、臂多 2（5 对 4）；H1-2 比 G1 多 4 个，全在手臂上（7 对 5）。这三个型号的颈部都不计入（头固定或无颈自由度），所以 23、19、27 都不含颈；若按通用配置加颈 2 个，分别是 25、21、29，如图 2.1。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch02-fig1-title ch02-fig1-desc">
+        <title id="ch02-fig1-title">G1 与 H1 的自由度账本</title>
+        <desc id="ch02-fig1-desc">两根水平堆叠的条形图：G1 共 23 个自由度，其中双腿 12、腰 1、双臂 10；H1 共 19 个，双腿 10、腰 1、双臂 8。横轴为关节数，从 0 到 30。</desc>
+        <g class="grid">
+          <line x1="185" y1="70" x2="185" y2="210"/>
+          <line x1="260" y1="70" x2="260" y2="210"/>
+          <line x1="335" y1="70" x2="335" y2="210"/>
+          <line x1="410" y1="70" x2="410" y2="210"/>
+          <line x1="485" y1="70" x2="485" y2="210"/>
+          <line x1="560" y1="70" x2="560" y2="210"/>
+        </g>
+        <g class="axis">
+          <line x1="110" y1="210" x2="560" y2="210"/>
+        </g>
+        <text x="110" y="46" font-size="12" class="tx-muted">图例</text>
+        <rect x="152" y="36" width="12" height="12" class="fl-d1"/>
+        <text x="170" y="46" font-size="12" class="tx-muted">腿 ×2（髋 3 + 膝 1 + 踝 1–2）</text>
+        <rect x="352" y="36" width="12" height="12" class="fl-d5"/>
+        <text x="370" y="46" font-size="12" class="tx-muted">腰</text>
+        <rect x="400" y="36" width="12" height="12" class="fl-d2"/>
+        <text x="418" y="46" font-size="12" class="tx-muted">臂 ×2</text>
+
+        <text x="100" y="112" font-size="13" text-anchor="end" class="tx-ink">G1（35 kg）</text>
+        <rect x="110" y="96" width="180" height="24" class="fl-d1"/>
+        <rect x="290" y="96" width="15" height="24" class="fl-d5"/>
+        <rect x="305" y="96" width="150" height="24" class="fl-d2"/>
+        <text x="200" y="113" font-size="12" text-anchor="middle" class="fl-surface t-mono" font-weight="600">12</text>
+        <text x="297.5" y="113" font-size="10" text-anchor="middle" class="fl-surface t-mono">1</text>
+        <text x="380" y="113" font-size="12" text-anchor="middle" class="fl-surface t-mono" font-weight="600">10</text>
+        <text x="465" y="113" font-size="15" class="t-mono tx-ink" font-weight="600">23</text>
+
+        <text x="100" y="172" font-size="13" text-anchor="end" class="tx-ink">H1（47 kg）</text>
+        <rect x="110" y="156" width="150" height="24" class="fl-d1"/>
+        <rect x="260" y="156" width="15" height="24" class="fl-d5"/>
+        <rect x="275" y="156" width="120" height="24" class="fl-d2"/>
+        <text x="185" y="173" font-size="12" text-anchor="middle" class="fl-surface t-mono" font-weight="600">10</text>
+        <text x="267.5" y="173" font-size="10" text-anchor="middle" class="fl-surface t-mono">1</text>
+        <text x="335" y="173" font-size="12" text-anchor="middle" class="fl-surface t-mono" font-weight="600">8</text>
+        <text x="405" y="173" font-size="15" class="t-mono tx-ink" font-weight="600">19</text>
+
+        <g class="sv-d2" fill="none" stroke-width="1">
+          <path d="M395 146 L395 140 L455 140 L455 146"/>
+        </g>
+        <text x="425" y="132" font-size="12" text-anchor="middle" class="tx-d2">少 4</text>
+
+        <g class="axis">
+          <line x1="110" y1="210" x2="110" y2="216"/>
+          <line x1="185" y1="210" x2="185" y2="216"/>
+          <line x1="260" y1="210" x2="260" y2="216"/>
+          <line x1="335" y1="210" x2="335" y2="216"/>
+          <line x1="410" y1="210" x2="410" y2="216"/>
+          <line x1="485" y1="210" x2="485" y2="216"/>
+          <line x1="560" y1="210" x2="560" y2="216"/>
+        </g>
+        <g font-size="12" text-anchor="middle" class="tx-muted t-mono">
+          <text x="110" y="232">0</text>
+          <text x="185" y="232">5</text>
+          <text x="260" y="232">10</text>
+          <text x="335" y="232">15</text>
+          <text x="410" y="232">20</text>
+          <text x="485" y="232">25</text>
+          <text x="560" y="232">30</text>
+        </g>
+        <text x="335" y="254" font-size="12" text-anchor="middle" class="tx-muted">关节数 / DoF</text>
+        <text x="110" y="280" font-size="12" class="tx-muted">商用整机多在 20–50 DoF，这两台都取在下限：先把站与走做稳，再谈手。</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 2.1</span>两台整机的自由度账本：G1 23 DoF、H1 19 DoF，下肢 12 对 10，差在踝的 roll 与手臂。
+      <span class="fig-note read-for">读者应看出：决定作业能力的是手臂自由度，决定能不能站稳的是那 10–12 个下肢关节，两者不该混在一个指标里谈；H1 省掉踝的 roll，用被动柔度换轻量。</span>
+      <span class="fig-src">来源：作者绘制，数据取自 Unitree G1 与 H1 产品页（2026-11 核对）。</span>
+    </figcaption>
+  </figure>
+
+  <div class="stat-row" data-reveal>
+    <div class="stat">
+      <span class="stat-value">12<small>DoF</small></span>
+      <span class="stat-label">双腿合计</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">6<small>DoF</small></span>
+      <span class="stat-label">单臂下限</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">23<small>DoF</small></span>
+      <span class="stat-label">G1 整机</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">19<small>DoF</small></span>
+      <span class="stat-label">H1 整机</span>
+    </div>
+  </div>
+
+  <p>20–50 这个区间是两头挤出来的。往下，多数机型 12 个下肢关节是站稳的硬需求（H1 省到 10 个，用被动踝 roll 换轻量），上半身再少于 8 个，站和抓总得放弃一个；往上，每多一个关节就多一个 0.3–0.6 kg 的模组、一对走线、一份零位标定和一条限位。多 10 个关节大约多 3–6 kg，对 47 kg 的 H1 就是 6–13% 的体重，而这些重量大多长在远端，惯量代价比质量代价更大。</p>
+  <p>冗余自由度（redundancy）指关节数超过任务所需的那部分。它的价值只有一个兑现方式：零空间（null space）。零空间是不改变脚的位置、只改变关节角的自运动集合，n 比任务维数多几维，零空间就有几维。这件事的前提是你算得出雅可比——算不出，多余的关节就只是标定与走线的负担。G1 单臂 5 DoF 时，手掌姿态不能独立于肘，抓杯子要借腰转；这不是设计失误，是把成本让给了控制。</p>
+
+  <aside class="callout callout--intuition" data-reveal>
+    <p class="callout-kicker">直觉 <span>Intuition</span></p>
+    <p>把冗余想成「多出来的旋钮」：只有当你知道每个旋钮不影响手上的杯子时，多出来的旋钮才让动作更顺；否则你只是在盲拧。</p>
+  </aside>
+
+  <h2>坐标系与正运动学：把关节角变成脚的位置</h2>
+  <p>这一节解决：给定一串关节角，怎么算出脚踩在哪里。</p>
+  <p>先固定三个坐标系。世界系 W 是右手系，z 向上、x 向前、y 向左，规划出来的落点与质心位置都在这里。机体系 B 的原点在骨盆的 IMU 上，同样 x 前 y 左 z 上，速度与加速度默认在 B 里表达。关节系跟着每根连杆走，关节角 q 按固定顺序排成向量：左腿 6 个、右腿 6 个、腰、左臂、右臂、颈。顺序必须写死，因为所有动力学库都按索引取关节。</p>
+  <p>正运动学（Forward Kinematics, FK）回答「角度到位置」。以一条平面两连杆腿为例：大腿长 L1、小腿长 L2，θ1 是髋的绝对角（从 +x 量起，向 z 下为正），θ2 是膝的相对角。平面坐标统一用 (x, z)：图 2.2 横轴是 x 前、纵轴是 z 下，式 2.2 与 2.3 也这么写；只有下面的代码块沿用 (x, y)，其中 y 就是这里的 z。每个关节对应一个齐次变换矩阵，末端位姿就是这些矩阵按顺序连乘——连乘的物理含义很朴素：先把大腿转 θ1，再在小腿自己身上叠加 θ2。</p>
+
+  <div class="formula-block">
+    <span class="formula">T(θ) = T<sub>1</sub>(θ<sub>1</sub>) · T<sub>2</sub>(θ<sub>2</sub>) · … · T<sub>n</sub>(θ<sub>n</sub>) · M</span>
+    <span class="formula-no">2.1</span>
+  </div>
+
+  <p>其中 M 是零位时末端的位姿。展开到平面上就得到两行：</p>
+
+  <div class="formula-block">
+    <span class="formula formula--stack"><span>x = L<sub>1</sub> cos θ<sub>1</sub> + L<sub>2</sub> cos(θ<sub>1</sub> + θ<sub>2</sub>)</span><span>z = L<sub>1</sub> sin θ<sub>1</sub> + L<sub>2</sub> sin(θ<sub>1</sub> + θ<sub>2</sub>)</span></span>
+    <span class="formula-no">2.2</span>
+  </div>
+
+  <p>代入一组具体数：L1 = L2 = 0.30 m、θ1 = 58.4°、θ2 = 42.6°，得到足端 (0.10, 0.55) m、膝盖 (0.157, 0.256) m。手算校核一次：0.30 × cos 58.4° = 0.157，正是膝盖的 x。这类「算完代回去」的检查看起来幼稚，但它能在你写错一个正负号时立刻抓住。</p>
+  <p>通用串联链更常用指数积（Product of Exponentials, PoE）：每个关节存一个 6 维螺旋轴，末端 = exp([S₁]θ₁) … exp([Sₙ]θₙ) · M。这一段是进阶写法，初学可以先用式 2.1 的连乘、跳过这里：螺旋轴 = 转轴方向 + 轴上一点，exp([S]θ) 就是绕该轴转 θ 的齐次变换；它省掉了逐连杆建坐标系的麻烦，相邻轴平行时也不会出现 DH 参数退化（DH 在平行轴下参数不唯一，标定容易跳）。两套写法工程上都在用，Modern Robotics 的教材与代码是 PoE 的标准参考。</p>
+
+  <h2>逆解：解析、数值与可达域</h2>
+  <p>这一节解决：给定脚要踩的位置，怎么反算关节角；以及为什么同一个位置会有两组解。</p>
+  <p>两连杆有闭式解，工具是余弦定理：把髋、膝、足三点看成三角形，三边是 L1、L2 和 r（髋到足的距离），r² = x² + z²。解出膝角，再用两段 atan2 定髋角：</p>
+
+  <div class="formula-block">
+    <span class="formula formula--stack"><span>θ<sub>2</sub> = ± arccos((r<sup>2</sup> − L<sub>1</sub><sup>2</sup> − L<sub>2</sub><sup>2</sup>) / (2 L<sub>1</sub> L<sub>2</sub>))</span><span>θ<sub>1</sub> = atan2(z, x) ∓ atan2(L<sub>2</sub> sin θ<sub>2</sub>, L<sub>1</sub> + L<sub>2</sub> cos θ<sub>2</sub>)</span></span>
+    <span class="formula-no">2.3</span>
+  </div>
+
+  <p>那个 ± 就是「膝盖朝前」与「膝盖朝后」两组解：脚在同一个点，膝盖可以在前面也可以在后面。配对规则：膝前解取 θ2 = +arccos(...)、θ1 用减号；膝后解取 θ2 = −arccos(...)、θ1 用加号，与下面代码的 knee_forward 分支一致。人的膝只能往一个方向弯，机器人靠机械限位与软件限位把另一组排除。切换分支时必须同时检查关节是否越限，否则控制器会在两组解之间跳变——现象是关节「抽一下」，而脚几乎没动。</p>
+
+  <section class="demo" data-demo="ik-2link" aria-labelledby="ch02-demo-title">
+    <div class="demo-bar">
+      <span class="demo-live"><i aria-hidden="true"></i>Live</span>
+      <h4 class="demo-title" id="ch02-demo-title">拖动足端：同一个位置，两套关节角</h4>
+      <span class="demo-tag">Demo 2.1</span>
+    </div>
+
+    <div class="demo-stage">
+      <svg viewBox="0 0 500 340" role="img" aria-labelledby="ch02-ik-title ch02-ik-desc" aria-describedby="ch02-ik-help" tabindex="0" class="ik-drag">
+        <title id="ch02-ik-title">双连杆腿的解析逆运动学演示</title>
+        <desc id="ch02-ik-desc">髋关节位于画面原点，大腿与小腿各 0.30 米，虚线圆为可达域边界，半径 0.60 米。拖动足端或按方向键移动目标，读数给出髋角、膝角、足端坐标与雅可比行列式。</desc>
+
+        <circle cx="250" cy="64" r="240" class="ik-reach"/>
+        <g class="ik-dash">
+          <line x1="250" y1="64" x2="330" y2="64"/>
+        </g>
+        <text x="336" y="68" font-size="15" class="tx-muted t-mono">+x</text>
+        <text x="258" y="54" font-size="15" class="tx-muted">髋 · 原点</text>
+        <text x="482" y="300" font-size="15" text-anchor="end" class="tx-muted t-mono halo">r = 0.60 m</text>
+        <text x="482" y="318" font-size="14" text-anchor="end" class="tx-muted halo">内边界 r = 0（L1 = L2）</text>
+
+        <polyline data-part="ghost" class="ik-ghost" points=""/>
+        <line data-part="thigh" class="ik-thigh" x1="250" y1="64" x2="312.9" y2="166.2"/>
+        <line data-part="shank" class="ik-shank" x1="312.9" y1="166.2" x2="290" y2="284"/>
+        <circle data-part="knee" class="ik-joint" cx="312.9" cy="166.2" r="5.5"/>
+        <circle class="ik-joint" cx="250" cy="64" r="6.5"/>
+
+        <line data-part="ext" class="ik-dash" x1="312.9" y1="166.2" x2="326" y2="188"/>
+        <path data-part="arc1" class="ik-arc" d=""/>
+        <path data-part="arc2" class="ik-arc" d=""/>
+        <text data-part="label1" font-size="16" class="tx-d2 t-mono halo">θ1</text>
+        <text data-part="label2" font-size="16" class="tx-d2 t-mono halo">θ2</text>
+
+        <g data-part="target">
+          <circle data-part="handle" class="ik-handle" cx="290" cy="284" r="8"/>
+          <line data-part="crossx" x1="280" y1="284" x2="300" y2="284" class="ik-dash"/>
+          <line data-part="crossy" x1="290" y1="274" x2="290" y2="294" class="ik-dash"/>
+        </g>
+        <text x="20" y="330" font-size="14" class="tx-muted">虚线：可达域边界与另一组解</text>
+      </svg>
+    </div>
+
+    <div class="demo-controls">
+      <button type="button" id="ch02-ik-branch" aria-pressed="true" aria-label="切换膝盖朝向，当前朝前">膝盖朝向：前</button>
+      <button type="button" id="ch02-ik-straight">把腿拉直</button>
+      <button type="button" id="ch02-ik-reset">回到默认位姿</button>
+      <span class="demo-out">L1 = L2 = 0.30 m</span>
+    </div>
+
+    <dl class="demo-readout">
+      <div><dt>髋角 θ1</dt><dd><span data-readout="theta1">58.4</span><small>°</small></dd></div>
+      <div><dt>膝角 θ2</dt><dd><span data-readout="theta2">42.6</span><small>°</small></dd></div>
+      <div><dt>足端 x, z</dt><dd><span data-readout="foot">0.10, 0.55</span><small>m</small></dd></div>
+      <div data-cell="det"><dt>|det J|</dt><dd><span data-readout="det">0.0609</span><small>m²/rad²</small></dd></div>
+    </dl>
+
+    <p class="demo-hint" id="ch02-ik-help">在图上按住拖动，或聚焦图形后按方向键移动（Shift 加大步长）。目标超出 r = 0.60 m 时会被吸附到边界；「把腿拉直」把膝角压到 0°，此时 |det J| = 0。</p>
+    <p class="demo-status" data-part="status">目标可达。</p>
+    <p class="sr-only" data-part="announce" role="status" aria-live="polite"></p>
+  </section>
+
+  <p>解析解只对 2R、球腕这类结构存在。7 个自由度的臂、带闭链的踝、有耦合的腰都没有闭式解，工程上改用数值解：从当前关节角出发，反复解一个线性方程把末端误差往下压。直接用 <span class="formula-inline">J<sup>−1</sup></span> 在奇异附近会炸，所以加一个阻尼项 λ，变成阻尼最小二乘（Damped Least Squares, DLS）。下面这段代码把正解、解析逆解、雅可比、条件数与 DLS 放在同一组数上对账。</p>
+
+  <pre data-lang="python"><code><span class="tok-k">import</span> math
+
+L1 = L2 = <span class="tok-n">0.30</span>                    <span class="tok-c"># 大腿、小腿，单位 m</span>
+LIMIT = math.radians(<span class="tok-n">10</span>)          <span class="tok-c"># 膝角小于 10° 视为接近奇异</span>
+
+<span class="tok-k">def</span> <span class="tok-f">fk</span>(t1, t2):
+    <span class="tok-s">"""正解：返回足端与膝关节位置，单位 m。"""</span>
+    kx, ky = L1 * math.cos(t1), L1 * math.sin(t1)
+    fx = kx + L2 * math.cos(t1 + t2)
+    fy = ky + L2 * math.sin(t1 + t2)
+    <span class="tok-k">return</span> (fx, fy), (kx, ky)
+
+<span class="tok-k">def</span> <span class="tok-f">ik</span>(x, y, knee_forward=<span class="tok-k">True</span>):
+    <span class="tok-s">"""解析逆解：r 超出 [|L1-L2|, L1+L2] 时返回 None。"""</span>
+    r2 = x * x + y * y
+    <span class="tok-k">if</span> <span class="tok-k">not</span> (abs(L1 - L2) ** <span class="tok-n">2</span> &lt;= r2 &lt;= (L1 + L2) ** <span class="tok-n">2</span>):
+        <span class="tok-k">return</span> <span class="tok-k">None</span>
+    c2 = (r2 - L1 * L1 - L2 * L2) / (<span class="tok-n">2</span> * L1 * L2)
+    t2 = math.acos(max(-<span class="tok-n">1.0</span>, min(<span class="tok-n">1.0</span>, c2)))      <span class="tok-c"># 只取 0…π</span>
+    <span class="tok-k">if</span> <span class="tok-k">not</span> knee_forward:
+        t2 = -t2
+    t1 = math.atan2(y, x) - math.atan2(L2 * math.sin(t2),
+                                       L1 + L2 * math.cos(t2))
+    <span class="tok-k">return</span> t1, t2
+
+<span class="tok-k">def</span> <span class="tok-f">jacobian</span>(t1, t2):
+    <span class="tok-s">"""平面 2R：行是 x/y，列是 θ1/θ2，单位 m/rad。"""</span>
+    s1, c1 = math.sin(t1), math.cos(t1)
+    s12, c12 = math.sin(t1 + t2), math.cos(t1 + t2)
+    <span class="tok-k">return</span> [[-L1 * s1 - L2 * s12, -L2 * s12],
+            [L1 * c1 + L2 * c12, L2 * c12]]
+
+<span class="tok-k">def</span> <span class="tok-f">det2</span>(J):
+    <span class="tok-c"># 化简后 = L1·L2·sin θ2：奇异只由膝角决定</span>
+    <span class="tok-k">return</span> J[<span class="tok-n">0</span>][<span class="tok-n">0</span>] * J[<span class="tok-n">1</span>][<span class="tok-n">1</span>] - J[<span class="tok-n">0</span>][<span class="tok-n">1</span>] * J[<span class="tok-n">1</span>][<span class="tok-n">0</span>]
+
+<span class="tok-k">def</span> <span class="tok-f">kappa</span>(J):
+    <span class="tok-s">"""2×2 条件数：σ1σ2=|det|，σ1²+σ2²=‖J‖²，不需要 SVD。"""</span>
+    d = abs(det2(J))
+    s = sum(v * v <span class="tok-k">for</span> row <span class="tok-k">in</span> J <span class="tok-k">for</span> v <span class="tok-k">in</span> row)
+    <span class="tok-k">if</span> d &lt; <span class="tok-n">1e-12</span>:
+        <span class="tok-k">return</span> float(<span class="tok-s">"inf"</span>)
+    disc = max(<span class="tok-n">0.0</span>, s * s - <span class="tok-n">4</span> * d * d)
+    s1 = math.sqrt((s + math.sqrt(disc)) / <span class="tok-n">2</span>)
+    s2 = math.sqrt((s - math.sqrt(disc)) / <span class="tok-n">2</span>)
+    <span class="tok-k">return</span> s1 / max(s2, <span class="tok-n">1e-12</span>)
+
+<span class="tok-k">def</span> <span class="tok-f">dls_step</span>(t1, t2, tx, ty, damping=<span class="tok-n">0.05</span>):
+    <span class="tok-s">"""阻尼最小二乘一步：(JᵀJ + λ²I)Δq = Jᵀe。"""</span>
+    (fx, fy), _ = fk(t1, t2)
+    J = jacobian(t1, t2)
+    ex, ey = tx - fx, ty - fy
+    a = J[<span class="tok-n">0</span>][<span class="tok-n">0</span>] ** <span class="tok-n">2</span> + J[<span class="tok-n">1</span>][<span class="tok-n">0</span>] ** <span class="tok-n">2</span> + damping ** <span class="tok-n">2</span>
+    b = J[<span class="tok-n">0</span>][<span class="tok-n">0</span>] * J[<span class="tok-n">0</span>][<span class="tok-n">1</span>] + J[<span class="tok-n">1</span>][<span class="tok-n">0</span>] * J[<span class="tok-n">1</span>][<span class="tok-n">1</span>]
+    d = J[<span class="tok-n">0</span>][<span class="tok-n">1</span>] ** <span class="tok-n">2</span> + J[<span class="tok-n">1</span>][<span class="tok-n">1</span>] ** <span class="tok-n">2</span> + damping ** <span class="tok-n">2</span>
+    g0 = J[<span class="tok-n">0</span>][<span class="tok-n">0</span>] * ex + J[<span class="tok-n">1</span>][<span class="tok-n">0</span>] * ey
+    g1 = J[<span class="tok-n">0</span>][<span class="tok-n">1</span>] * ex + J[<span class="tok-n">1</span>][<span class="tok-n">1</span>] * ey
+    det = a * d - b * b
+    <span class="tok-k">return</span> ((d * g0 - b * g1) / det, (a * g1 - b * g0) / det)
+
+<span class="tok-c"># 目标足端 (x, y)；代码里的 y 就是图 2.2 的 z（向下为正）</span>
+target = (<span class="tok-n">0.10</span>, <span class="tok-n">0.55</span>)
+t1, t2 = math.pi / <span class="tok-n">2</span>, <span class="tok-n">0.3</span>         <span class="tok-c"># 故意给偏 30° 的初值</span>
+<span class="tok-k">for</span> _ <span class="tok-k">in</span> range(<span class="tok-n">8</span>):                <span class="tok-c"># 数值解：不依赖解析式</span>
+    dt1, dt2 = dls_step(t1, t2, *target)
+    t1, t2 = t1 + dt1, t2 + dt2
+
+(fx, fy), _ = fk(t1, t2)
+J = jacobian(t1, t2)
+err = math.hypot(fx - target[<span class="tok-n">0</span>], fy - target[<span class="tok-n">1</span>])
+print(<span class="tok-s">f"θ1={math.degrees(t1):7.2f}°  θ2={math.degrees(t2):7.2f}°"</span>)
+print(<span class="tok-s">f"末端误差 {err * 1000:.3f} mm，|det J|={abs(det2(J)):.5f} m²/rad²"</span>)
+print(<span class="tok-s">f"条件数 κ={kappa(J):6.1f}"</span> +
+      (<span class="tok-s">"  [警告] 接近奇异"</span> <span class="tok-k">if</span> abs(t2) &lt; LIMIT <span class="tok-k">else</span> <span class="tok-s">""</span>))</code></pre>
+
+  <p>运行结果是 θ1 = 58.40°、θ2 = 42.60°、误差 0.000 mm、κ = 6.5——数值解从偏 30° 的初值出发，8 次迭代收敛到解析解。这段代码有两处值得记住：条件数用 σ₁σ₂ = |det J| 与 σ₁² + σ₂² = ‖J‖² 这两个恒等式算，2×2 不需要 SVD；DLS 的阻尼 λ 在奇异附近把步长压小，代价是收敛变慢，这是「不炸」换来的。</p>
+  <p>所有可达足端位置的集合叫工作空间（workspace）。两连杆的可达域是一个圆环：外半径 L1 + L2，内半径 |L1 − L2|。L1 = L2 时内半径是 0，圆环退化成圆盘——腿能完全折叠，脚能碰到髋。图 2.2 把这台 0.6 m 腿的可达域、两条解的膝盖位置、以及 |det J| 的等值线画在一起。</p>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 410" role="img" aria-labelledby="ch02-fig2-title ch02-fig2-desc">
+        <title id="ch02-fig2-title">两连杆腿的可达域与雅可比行列式等值线</title>
+        <desc id="ch02-fig2-desc">侧视平面图，髋在原点，x 向前、z 向下，单位米。外圈虚线为可达边界 r = 0.60 米，内部五道同心圆是 |det J| 的等值线，其中 r = 0.42 米处为最大值 0.090 m²/rad²，向内外两侧都减小。同一个足端目标 (0.10, 0.55) 画出了膝前与膝后两组解。</desc>
+
+        <circle cx="300" cy="190" r="168" class="ik-reach"/>
+        <circle cx="300" cy="190" r="159.6" class="ik-iso"/>
+        <circle cx="300" cy="190" r="142.8" class="ik-iso"/>
+        <circle cx="300" cy="190" r="117.6" class="ik-iso"/>
+        <circle cx="300" cy="190" r="84" class="ik-iso"/>
+        <circle cx="300" cy="190" r="42" class="ik-iso"/>
+
+        <text x="473" y="184" font-size="12" class="tx-muted t-mono halo">r = 0.60</text>
+        <text x="184" y="154" font-size="12" text-anchor="end" class="tx-muted t-mono halo">0.090（r = 0.42，最大）</text>
+        <text x="156" y="274" font-size="12" text-anchor="end" class="tx-muted t-mono halo">0.053（r = 0.57）</text>
+
+        <g class="axis">
+          <line x1="300" y1="190" x2="362" y2="190"/>
+          <line x1="300" y1="190" x2="300" y2="252"/>
+        </g>
+        <text x="366" y="194" font-size="12" class="tx-muted t-mono">x 前</text>
+        <text x="306" y="266" font-size="12" class="tx-muted t-mono">z 下</text>
+
+        <line x1="300" y1="190" x2="344" y2="261.5" class="ik-thigh"/>
+        <line x1="344" y1="261.5" x2="328" y2="344" class="ik-shank"/>
+        <circle cx="344" cy="261.5" r="4" class="ik-joint"/>
+        <circle cx="300" cy="190" r="5" class="ik-joint"/>
+
+        <polyline points="300,190 284,272.5 328,344" class="ik-ghost"/>
+        <circle cx="284" cy="272.5" r="3" class="ik-joint"/>
+
+        <circle cx="328" cy="344" r="6" class="ik-handle"/>
+        <line x1="318" y1="344" x2="338" y2="344" class="ik-dash"/>
+        <line x1="328" y1="334" x2="328" y2="354" class="ik-dash"/>
+
+        <text x="356" y="236" font-size="12" class="tx-d1 halo">膝前解 +42.6°</text>
+        <text x="272" y="296" font-size="12" text-anchor="end" class="tx-muted halo">膝后解 −42.6°</text>
+        <text x="340" y="366" font-size="12" class="tx-ink halo">足端目标 (0.10, 0.55)</text>
+
+        <g class="axis">
+          <line x1="500" y1="388" x2="556" y2="388"/>
+          <line x1="500" y1="383" x2="500" y2="393"/>
+          <line x1="556" y1="383" x2="556" y2="393"/>
+        </g>
+        <text x="528" y="380" font-size="12" text-anchor="middle" class="tx-muted t-mono">0.2 m</text>
+
+        <line x1="40" y1="36" x2="64" y2="36" class="ik-thigh"/>
+        <text x="70" y="40" font-size="12" class="tx-muted">膝前解</text>
+        <line x1="130" y1="36" x2="154" y2="36" class="ik-ghost"/>
+        <text x="160" y="40" font-size="12" class="tx-muted">膝后解</text>
+        <text x="40" y="396" font-size="12" class="tx-muted">等值线为 |det J| / (m²·rad⁻²)；越靠边界越小，L1 = L2 = 0.30 m</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 2.2</span>两连杆腿的可达域与 |det J| 等值线：膝角只由髋到足的距离 r 决定，所以等值线是同心圆。
+      <span class="fig-note read-for">读者应看出：可达边界上 |det J| 归零，圆心（完全折叠）也归零，最大值 0.090 出现在 r = 0.42 m 处；同一个足端位置有两组膝角解，膝盖一前一后。</span>
+      <span class="fig-src">来源：作者绘制，L1 = L2 = 0.30 m，按 θ2 = arccos((r² − L1² − L2²)/(2L1L2)) 计算。</span>
+    </figcaption>
+  </figure>
+
+  <h2>雅可比：速度与力的同一张表</h2>
+  <p>这一节解决：关节转一点，脚动多少；脚受一分力，关节要出多大力。</p>
+  <p>雅可比矩阵（Jacobian）J 把关节速度映射成末端速度，把末端力映射成关节力矩。同一个矩阵、转置一下，承担两件事：</p>
+
+  <div class="formula-block">
+    <span class="formula"><span class="qdot">x</span> = J(q) <span class="qdot">q</span>　　τ = J<sup>⊤</sup>(q) F</span>
+    <span class="formula-no">2.4</span>
+  </div>
+
+  <p>平面 2R 的 J 是 2×2，单位 m/rad。第一式是速度映射，第二式是力映射，两者互为对偶——这叫速度-力对偶（velocity-force duality）。所有阻抗控制、全身控制、以及后面第 5 章的 <span class="formula-inline">τ = J<sup>⊤</sup>F</span> 估算，都从这张表出发。它对 2R 的行列式可以化简成一行：</p>
+
+  <div class="formula-block">
+    <span class="formula">det J = L<sub>1</sub> L<sub>2</sub> sin θ<sub>2</sub></span>
+    <span class="formula-no">2.5</span>
+  </div>
+
+  <p>这个式子说明两件事。第一，奇异只由膝角决定，与髋角无关：腿伸直（θ2 = 0）或完全折叠（θ2 = 180°）时 det J 归零。第二，|det J| 在 θ2 = 90° 时取最大值 0.09 m²/rad²，在伸直时为 0。条件数（condition number）κ = σmax / σmin 把这件事量化：θ2 = 5° 时 |det J| 只剩最大值的 8.7%，κ ≈ 57；θ2 = 1° 时 κ ≈ 290。</p>
+  <p>κ 大不是数学上的不优雅，而是物理上的失控。足端在某个方向上的力臂趋近于零，同样的地面反力要几倍甚至无穷大的关节力矩；反过来，关节角的一点误差会被放大成很大的足端位置误差。腿伸直时最危险，正是因为它同时踩中这两条。</p>
+
+  <aside class="callout callout--warning" data-reveal>
+    <p class="callout-kicker">警告 <span>Warning</span></p>
+    <p>别把「腿伸直」当成省力站姿。伸直时地面反力过膝，静态力矩确实最小；但 θ2 趋近 0 时足端沿腿方向的可控力也趋近 0，控制器算出的力矩指令会瞬间饱和，膝角一点扰动就能激出很大的角速度。设计上留 5–15° 屈曲，软件限位不要把 0° 写成可达值。</p>
+  </aside>
+
+  <h2>静力学：589 N 怎么变成 88 N·m</h2>
+  <p>这一节解决：单腿支撑时，髋、膝、踝各要出多大力矩。</p>
+  <p>静力学就是把地面反力 F 通过 Jᵀ 映射回关节。工程上更好用的是杠杆臂形式：<span class="formula-inline">τ ≈ F·d</span>，d 是地面反力作用线到关节轴的垂直距离。这个 d 由姿态决定，不由腿长决定——同样一条腿，蹲下去 d 变大，站直了 d 变小。</p>
+
+  <div class="formula-block">
+    <span class="formula">τ<sub>knee</sub> ≈ F<sub>z</sub> · d</span>
+    <span class="formula-no">2.6</span>
+  </div>
+
+  <p>算一个 60 kg 的例：单腿支撑时 Fz = 60 × 9.81 = 589 N。膝前伸 0.15 m，膝盖要 88 N·m；踝的 d 被足长锁死——脚长 0.24 m、压力中心最多前移到踝前 0.08 m，所以踝只有 47 N·m；髋在额状面 d = 0.10 m 时是 59 N·m。三个关节里膝最大，原因只有一条：它的力臂可以做到 0.15–0.20 m，踝不行。脚再长一点确实能增大力臂，但滚动会变差，落脚时也更容易绊。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 340" role="img" aria-labelledby="ch02-fig3-title ch02-fig3-desc">
+        <title id="ch02-fig3-title">关节力矩随杠杆臂线性增长</title>
+        <desc id="ch02-fig3-desc">横轴为地面反力到关节轴的垂直距离 d，0 到 0.20 米；纵轴为关节力矩，0 到 200 牛米。两条直线分别对应 60 公斤（589 牛）与 90 公斤（883 牛）单腿支撑。踝的 d 被足长限制在 0.08 米以内，膝的工作点取 0.15 米。</desc>
+        <rect x="86" y="60" width="181.6" height="222" class="fl-band"/>
+        <g class="grid">
+          <line x1="86" y1="115.5" x2="540" y2="115.5"/>
+          <line x1="86" y1="171" x2="540" y2="171"/>
+          <line x1="86" y1="226.5" x2="540" y2="226.5"/>
+          <line x1="199.5" y1="60" x2="199.5" y2="282"/>
+          <line x1="313" y1="60" x2="313" y2="282"/>
+          <line x1="426.5" y1="60" x2="426.5" y2="282"/>
+        </g>
+        <g class="axis">
+          <line x1="86" y1="282" x2="540" y2="282"/>
+          <line x1="86" y1="60" x2="86" y2="282"/>
+          <line x1="86" y1="282" x2="86" y2="288"/>
+          <line x1="199.5" y1="282" x2="199.5" y2="288"/>
+          <line x1="313" y1="282" x2="313" y2="288"/>
+          <line x1="426.5" y1="282" x2="426.5" y2="288"/>
+          <line x1="540" y1="282" x2="540" y2="288"/>
+        </g>
+        <g font-size="12" class="tx-muted t-mono">
+          <text x="78" y="286" text-anchor="end">0</text>
+          <text x="78" y="230.5" text-anchor="end">50</text>
+          <text x="78" y="175" text-anchor="end">100</text>
+          <text x="78" y="119.5" text-anchor="end">150</text>
+          <text x="78" y="64" text-anchor="end">200</text>
+          <text x="86" y="300" text-anchor="middle">0</text>
+          <text x="199.5" y="300" text-anchor="middle">0.05</text>
+          <text x="313" y="300" text-anchor="middle">0.10</text>
+          <text x="426.5" y="300" text-anchor="middle">0.15</text>
+          <text x="540" y="300" text-anchor="middle">0.20</text>
+        </g>
+
+        <line x1="86" y1="282" x2="540" y2="151" class="sv-d1" stroke-width="2"/>
+        <line x1="86" y1="282" x2="540" y2="86" class="sv-d2" stroke-width="2"/>
+        <line x1="86" y1="182.1" x2="540" y2="182.1" class="sv-d4" stroke-width="1" stroke-dasharray="5 4"/>
+
+        <text x="96" y="172" font-size="12" class="tx-d2">G1 膝 90 N·m（标称）</text>
+        <text x="536" y="52" font-size="12" text-anchor="end" class="tx-muted">H1 膝 360 N·m 在图外，约为静态需求的 3–5 倍</text>
+
+        <circle cx="426.5" cy="184" r="4.5" class="fl-d1"/>
+        <circle cx="426.5" cy="135" r="4.5" class="fl-d2"/>
+        <text x="438" y="198" font-size="12" class="tx-ink halo">60 kg：88 N·m</text>
+        <text x="438" y="152" font-size="12" class="tx-ink halo">90 kg：132 N·m</text>
+
+        <circle cx="267.6" cy="229.7" r="4" class="fl-d1"/>
+        <circle cx="267.6" cy="203.6" r="4" class="fl-d2"/>
+        <text x="278" y="252" font-size="12" class="tx-muted halo">踝：47 / 71 N·m</text>
+        <text x="262" y="76" font-size="12" text-anchor="end" class="tx-muted">d ≤ 0.08 m，足长锁死</text>
+
+        <text x="30" y="171" font-size="12" text-anchor="middle" class="tx-muted" transform="rotate(-90 30 171)">关节力矩 τ / N·m</text>
+        <text x="313" y="324" font-size="12" text-anchor="middle" class="tx-muted">杠杆臂 d / m</text>
+
+        <line x1="96" y1="28" x2="120" y2="28" class="sv-d1" stroke-width="2"/>
+        <text x="126" y="32" font-size="12" class="tx-muted">60 kg（F = 589 N）</text>
+        <line x1="250" y1="28" x2="274" y2="28" class="sv-d2" stroke-width="2"/>
+        <text x="280" y="32" font-size="12" class="tx-muted">90 kg（F = 883 N）</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 2.3</span>关节力矩与杠杆臂成正比：d 每增加 1 cm，60 kg 机器人膝上多 5.9 N·m。
+      <span class="fig-note read-for">读者应看出：膝的工作点落在 0.15 m、踝被足长压在 0.08 m 以内，两者差了近 2 倍力臂；体重从 60 kg 涨到 90 kg，力矩同比例上涨。</span>
+      <span class="fig-src">来源：作者绘制，按 τ = Fz·d 计算，Fz = mg，g = 9.81 m/s²。</span>
+    </figcaption>
+  </figure>
+
+  <p>静态值只是下限。走路时地面反力峰值约为体重的 1.1–1.3 倍，取 1.2：膝 106 N·m；再按峰值安全系数 1.5 选型，目标就是 160 N·m。这解释了产品页上的配比：35 kg 的 G1 把膝做到 90 N·m（EDU 版 120 N·m），够慢走与静态支撑；47 kg 的 H1 直接给 360 N·m，因为跑跳的冲击系数不是 1.2 而是 3–4：静态力臂只解释 1.9 倍（0.15 m 对 0.08 m），其余三倍多要靠冲击余量补上（量级推断）。</p>
+
+  <h2>动力学直觉：惯量、刚度与小腿</h2>
+  <p>这一节解决：为什么小腿要轻，为什么减速比不能随便加大。</p>
+  <p>惯量 I = Σ mᵢrᵢ²，r 是质量元到转轴的距离，平方项意味着远端质量最贵。算一个 60 kg 的例：小腿 2.4 kg、长 0.40 m、质心在膝下 0.18 m，也就是距髋 0.40 + 0.18 = 0.58 m，绕髋惯量约 2.4 × 0.58² + 0.03（自身绕质心项）≈ 0.84 kg·m²；大腿 6 kg、质心距髋 0.22 m，约 0.38 kg·m²。小腿质量只有大腿的 40%，却贡献了 69% 的摆动惯量（0.84 / 1.22）。换成更直白的说法：每 1 kg 放在小腿上，对髋惯量的贡献是放在大腿上的 6.9 倍（0.58² / 0.22²）。</p>
+  <p>走路时摆动腿要在 0.2–0.3 s 内完成一次前摆，髋要提供的角加速度在 20–40 rad/s² 量级。惯量大 10%，同一套增益下跟踪误差就大 10%，而控制器只能靠加大增益去补——增益又受结构谐振限制。这条链子上没有免费的补偿。</p>
+  <p>第二件事是反射惯量（reflected inertia）：电机转子经过减速比放大，折算到输出侧是</p>
+
+  <div class="formula-block">
+    <span class="formula">J<sub>eff</sub> = J<sub>m</sub> N<sup>2</sup> + J<sub>l</sub></span>
+    <span class="formula-no">2.7</span>
+  </div>
+
+  <p>转子惯量 1×10⁻⁵ kg·m²、减速比 N = 100 时，<span class="formula-inline">J<sub>eff</sub></span> 里电机那一项就是 0.1 kg·m²，与被驱动的小腿绕膝惯量同量级——按本章 XML 的 2.4 kg、质心在膝下 0.18 m 算，小腿绕膝约 0.11 kg·m²。它只是整条腿绕髋 1.22 kg·m² 的 8%，但对膝关节本身已经是必须计入的负载。膝盖撞到地面时，电机看到的是一个和腿差不多重的惯量，冲击直接进减速器。N = 9 时同一颗转子只贡献 8×10⁻⁴ kg·m²，这就是准直驱敢让人用手去拨的原因。</p>
+  <p>第三件事是结构刚度。连杆不是刚体，一阶弯曲频率必须比力控带宽高 2–3 倍，否则控制器会把结构谐振当成负载去激励。一根 0.40 m 长、外径 30 mm、壁厚 2 mm 的碳管，按悬臂梁估算一阶弯曲约 230 Hz（E = 70 GPa、ρ = 1600 kg/m³）；QDD 的力矩环带宽 100–300 Hz，两者只隔一倍，所以结构设计的目标很具体：别让 200 Hz 附近出现一个高 Q 的峰。</p>
+
+  <h2>关节模组：五种传动，一张表</h2>
+  <p>这一节解决：同样输出 100 N·m，为什么有的关节能用手反驱、有的不能。</p>
+  <p>一个关节模组等于五件东西：电机、减速器、编码器、驱动器，外加可选的力矩传感器或弹性元件。选型看四个数：峰值与连续力矩、转速、反射惯量、背隙与扭转刚度。表 2.1 是五种常见方案的量级对比。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 2.1 五种关节传动方案的量级对比（′ = 角分，1′ = 1/60°；价格为单件量级估计）</caption>
+      <thead>
+        <tr>
+          <th>类型</th>
+          <th class="num">减速比</th>
+          <th class="num">效率</th>
+          <th>背隙 / 精度</th>
+          <th>反驱透明度</th>
+          <th class="num">成本</th>
+          <th>典型用途</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>谐波</td>
+          <td class="num">50–160</td>
+          <td class="num">65–85%</td>
+          <td>零背隙 1.5′</td>
+          <td>差（柔度）</td>
+          <td class="num">$300–1200</td>
+          <td>肩、肘、腕</td>
+        </tr>
+        <tr>
+          <td>行星</td>
+          <td class="num">3–10</td>
+          <td class="num">90–97%</td>
+          <td>3–10′</td>
+          <td>中</td>
+          <td class="num">$80–400</td>
+          <td>膝、髋二级减速</td>
+        </tr>
+        <tr>
+          <td>摆线</td>
+          <td class="num">20–120</td>
+          <td class="num">80–90%</td>
+          <td>1–3′</td>
+          <td>差</td>
+          <td class="num">$200–600</td>
+          <td>重载关节</td>
+        </tr>
+        <tr>
+          <td>准直驱 QDD</td>
+          <td class="num">6–10</td>
+          <td class="num">80–90%</td>
+          <td>0.3–0.6°</td>
+          <td>好（可手拨）</td>
+          <td class="num">$150–400</td>
+          <td>腿的髋膝踝</td>
+        </tr>
+        <tr>
+          <td>串联弹性 SEA</td>
+          <td class="num">30–100</td>
+          <td class="num">60–85%</td>
+          <td>由弹簧决定</td>
+          <td>好（带宽低）</td>
+          <td class="num">$400–1500</td>
+          <td>协作臂、力控关节</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>谐波的卖点是精度：<a href="https://www.harmonicdrive.net/products/gear-units/gear-units/csf-2uh">CSF-14-100</a> 重复峰值 28 N·m、瞬时 54 N·m、重 0.52 kg，传动精度 1.5 arcmin。但它的瓶颈不是背隙而是柔度：扭转刚度 K1 ≈ 0.47×10⁴ N·m/rad，28 N·m 下扭 0.34°，而 19 bit 编码器折算到关节侧约 7×10⁻⁶°——两者差五个数量级。所以「零背隙 = 高精度」是伪命题，误差预算里柔度才是大头。</p>
+  <p>QDD 的卖点是透明：CubeMars AK80-9 是 9:1、9 N·m 连续 / 22 N·m 峰值、490 g，用手能拨动输出轴，力矩环带宽 100–300 Hz。代价是峰值电流大、铜损与温升成为瓶颈，连续力矩只有峰值的 40% 左右——站立不动比跑跳更容易过热：热看的是电流的均方根，站立时力矩小但一直通电，跑跳时峰值大但每步只有 30% 的时间在用力；连续力矩由散热决定，不由峰值决定（第 03 章给算例）。为什么现在流行 QDD：腿需要的是力控带宽与抗冲击，而不是减速比；把 N 从 100 降到 9，反射惯量降两个数量级，控制器的增益才敢往上开。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 340" role="img" aria-labelledby="ch02-fig4-title ch02-fig4-desc">
+        <title id="ch02-fig4-title">减速比与反射惯量</title>
+        <desc id="ch02-fig4-desc">双对数坐标：横轴为减速比 1 到 100，纵轴为折算惯量 10⁻³ 到 2×10⁻¹ 千克二次方米。曲线按 J_eff = 1e-5·N² + 0.005 计算，N 从 9 增到 100 时折算惯量从 5.8×10⁻³ 涨到 0.105。虚线为小腿绕膝的负载惯量 0.11。</desc>
+        <rect x="392" y="60" width="148" height="222" class="fl-band"/>
+        <g class="grid">
+          <line x1="90" y1="185.5" x2="540" y2="185.5"/>
+          <line x1="90" y1="89" x2="540" y2="89"/>
+          <line x1="197.4" y1="60" x2="197.4" y2="282"/>
+          <line x1="315" y1="60" x2="315" y2="282"/>
+          <line x1="422.4" y1="60" x2="422.4" y2="282"/>
+        </g>
+        <g class="axis">
+          <line x1="90" y1="282" x2="540" y2="282"/>
+          <line x1="90" y1="60" x2="90" y2="282"/>
+          <line x1="90" y1="282" x2="90" y2="288"/>
+          <line x1="197.4" y1="282" x2="197.4" y2="288"/>
+          <line x1="315" y1="282" x2="315" y2="288"/>
+          <line x1="422.4" y1="282" x2="422.4" y2="288"/>
+          <line x1="540" y1="282" x2="540" y2="288"/>
+        </g>
+        <g font-size="12" class="tx-muted t-mono">
+          <text x="82" y="286" text-anchor="end">10⁻³</text>
+          <text x="82" y="189.5" text-anchor="end">10⁻²</text>
+          <text x="82" y="93" text-anchor="end">10⁻¹</text>
+          <text x="90" y="300" text-anchor="middle">1</text>
+          <text x="197.4" y="300" text-anchor="middle">3</text>
+          <text x="315" y="300" text-anchor="middle">10</text>
+          <text x="422.4" y="300" text-anchor="middle">30</text>
+          <text x="540" y="300" text-anchor="middle">100</text>
+        </g>
+
+        <line x1="90" y1="85" x2="540" y2="85" class="sv-d4" stroke-width="1" stroke-dasharray="5 4"/>
+        <text x="96" y="79" font-size="12" class="tx-muted">小腿绕膝负载 0.11 kg·m²</text>
+
+        <polyline class="sv-d1" stroke-width="2" fill="none" points="90.0,214.5 101.2,214.5 112.5,214.4 123.8,214.4 135.0,214.4 146.2,214.3 157.5,214.2 168.8,214.1 180.0,214.0 191.2,213.9 202.5,213.7 213.8,213.5 225.0,213.3 236.2,212.9 247.5,212.5 258.8,212.0 270.0,211.4 281.2,210.6 292.5,209.6 303.8,208.4 315.0,206.9 326.2,205.2 337.5,203.0 348.8,200.5 360.0,197.5 371.2,194.0 382.5,190.0 393.8,185.5 405.0,180.4 416.2,174.7 427.5,168.5 438.8,161.9 450.0,154.7 461.2,147.2 472.5,139.3 483.8,131.1 495.0,122.7 506.2,114.0 517.5,105.1 528.8,96.1 540.0,87.0"/>
+
+        <circle cx="304.7" cy="208.3" r="4.5" class="fl-d1"/>
+        <circle cx="422.4" cy="171.4" r="4.5" class="fl-d1"/>
+        <circle cx="540" cy="87" r="4.5" class="fl-d2"/>
+
+        <text x="300" y="228" font-size="12" text-anchor="middle" class="tx-ink halo">9 : 1 QDD，5.8×10⁻³</text>
+        <text x="432" y="196" font-size="12" text-anchor="middle" class="tx-ink halo">30 : 1，1.4×10⁻²</text>
+        <text x="534" y="76" font-size="12" text-anchor="end" class="tx-d2 halo">100 : 1 谐波，0.105</text>
+        <text x="466" y="272" font-size="12" text-anchor="middle" class="tx-muted">N = 100 时逼近负载惯量</text>
+
+        <text x="34" y="171" font-size="12" text-anchor="middle" class="tx-muted" transform="rotate(-90 34 171)">折算惯量 J_eff / kg·m²</text>
+        <text x="315" y="324" font-size="12" text-anchor="middle" class="tx-muted">减速比 N（对数）</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 2.4</span>反射惯量随减速比按 N² 增长：N 从 9 到 100，电机项从 8×10⁻⁴ 涨到 0.1，接近小腿绕膝的负载惯量 0.11。
+      <span class="fig-note read-for">读者应看出：N = 100 时电机侧惯量已到负载的九成，力控要为此付出代价；N = 9 时只有 8×10⁻⁴，差两个数量级。想保住力控带宽，减速比就得往左选。</span>
+      <span class="fig-src">来源：作者绘制，按 J_eff = Jm·N² + Jl 计算，Jm = 1×10⁻⁵ kg·m²、Jl = 0.005 kg·m²（曲线基线项）；虚线为小腿绕膝负载 0.11 kg·m²（2.4 kg、质心在膝下 0.18 m）。</span>
+    </figcaption>
+  </figure>
+
+  <aside class="callout callout--field" data-reveal>
+    <p class="callout-kicker">工程经验 <span>Field Note</span></p>
+    <p>样机上量到的 0.3° 跟随误差，九成来自减速器柔度与连杆变形，不是编码器位数。先把刚度预算做出来，再决定 encoder 买 17 bit 还是 19 bit——顺序反了，钱花在最不重要的地方。</p>
+  </aside>
+
+  <h2>腿型、足端与结构工程</h2>
+  <p>这一节解决：腿该多长、脚该多大、踝该怎么驱动，以及结构上哪些细节会让前面的计算全部作废。</p>
+  <p>大腿与小腿的长度比常见 1:1，各 0.40 m 左右，膝盖落在中间，工作空间对称、正逆解都好写。大腿明显长于小腿（1.2:1）利于跨障，但摆动惯量大；小腿过长则蹲不下去，髋的力矩需求也上来。0.9 m 腿长的机器人，站立时髋高大约 0.75–0.85 m，留 10–15° 膝屈曲。</p>
+  <p>足端有两种取向。点足是半径 5–10 mm 的球，没有踝的支撑力矩，靠点接触，控制简单、对地面不敏感，适合研究步态。平板足长 0.20–0.26 m，有支撑多边形，能站着不动、能缓慢重心转移，代价是踝要出力矩，落脚角度误差会直接变成冲击。人形多用平板足加橡胶底，橡胶与地面的摩擦系数 μ 在 0.6–1.0，低于 0.4 的瓷砖上，摩擦锥会先于力矩限幅约束住你。</p>
+  <p>踝的驱动分串联与并联。串联是两个电机都装在踝上，结构简单、行程大，但质量在远端；并联把电机放到小腿或髋部，用推杆或四杆机构传下来，远端只留连杆，摆动惯量小，代价是关节耦合、背隙与标定都更麻烦。Agility 的 Cassie 就把踝的驱动放在近端、用连杆传动，小腿上几乎没有电机。</p>
+  <p>结构材料在 7075-T6 铝与碳纤维之间选。7075-T6 屈服强度约 503 MPa、密度 2.81 g/cm³，好加工、好攻丝、能做金属嵌件；碳纤维密度 1.5–1.6 g/cm³，比刚度高 3–4 倍，但连接处必须加金属嵌件，否则螺栓会把孔压溃。拓扑优化能减 20–40% 的质量，前提是载荷工况写对：把「跌倒时单腿承受 3 倍体重」写进工况，否则优化出来的腿一摔就断。</p>
+  <p>剩下的都是细节，但每一条都能让前面的计算作废。走线：动态弯折半径至少 10 倍线径，弯折寿命 10⁶–10⁷ 次，绕不过去就加一个中间固定点。防护：关节 IP54 到 IP67，IP67 的代价是密封圈摩擦与散热变差。散热：连续力矩由铜损与外壳热阻决定，AK80-9 连续 9 N·m、峰值 22 N·m，长时间站立比跑跳更容易过热。装配与标定：关节零位、双编码器偏置、连杆长度要一起标——用三个已知足端位置就能把 L1、L2 与零位偏差一起解出来，比逐个量零件快得多。</p>
+
+  <h2>工具链与三个真实取舍</h2>
+  <p>这一节解决：从一张 CAD 图到能跑的仿真，最小闭环是什么；以及三家真实机器人的取舍。</p>
+  <p>先把角色分清：Onshape、SolidWorks 是 CAD，画零件与装配；URDF、MJCF 是描述连杆、关节、惯量的文件格式；MuJoCo、Isaac 是读这种文件做物理仿真的软件；RNEA 是递推牛顿—欧拉算法，用来算逆动力学、复核惯量。最小闭环是四步：CAD 里建装配（Onshape 或 SolidWorks）→ 导出 URDF 或 MJCF（onshape-to-robot 这类工具直接读装配约束）→ 在 MuJoCo 或 Isaac 里加载 → 用 RNEA 复核惯量。结构有限元（Finite Element Analysis, FEA）只算三个最危险的工况：单腿 3 倍体重、跌倒侧摔、急停。每一步都有验收项：总质量与 CAD 误差小于 5%，质心偏差小于 10 mm，足底穿透小于 1 mm，PD 站立 10 s 不摔。</p>
+
+  <pre data-lang="xml"><code><span class="tok-c">&lt;!-- 膝关节：轴、限位、惯量全部来自 CAD，手填的只有注释 --&gt;</span>
+&lt;joint name=<span class="tok-s">"knee_l"</span> type=<span class="tok-s">"revolute"</span>&gt;
+  &lt;parent link=<span class="tok-s">"thigh_l"</span>/&gt;
+  &lt;child link=<span class="tok-s">"shank_l"</span>/&gt;
+  &lt;origin xyz=<span class="tok-s">"0 0 -0.40"</span> rpy=<span class="tok-s">"0 0 0"</span>/&gt;
+  &lt;axis xyz=<span class="tok-s">"0 1 0"</span>/&gt;                  <span class="tok-c">&lt;!-- 俯仰轴，正方向按右手定则 --&gt;</span>
+  &lt;limit lower=<span class="tok-s">"-0.05"</span> upper=<span class="tok-s">"2.44"</span> effort=<span class="tok-s">"160"</span> velocity=<span class="tok-s">"12"</span>/&gt;
+&lt;/joint&gt;
+
+&lt;link name=<span class="tok-s">"shank_l"</span>&gt;
+  <span class="tok-c">&lt;!-- 2.4 kg、质心在膝下 0.18 m；CAD 默认密度 1000 kg/m³ 是最常见的坑 --&gt;</span>
+  &lt;inertial&gt;
+    &lt;mass value=<span class="tok-s">"2.4"</span>/&gt;
+    &lt;origin xyz=<span class="tok-s">"0 0 -0.18"</span>/&gt;
+    &lt;inertia ixx=<span class="tok-s">"0.031"</span> iyy=<span class="tok-s">"0.030"</span> izz=<span class="tok-s">"0.002"</span>
+             ixy=<span class="tok-s">"0"</span> ixz=<span class="tok-s">"0"</span> iyz=<span class="tok-s">"0"</span>/&gt;
+  &lt;/inertial&gt;
+&lt;/link&gt;</code></pre>
+
+  <p>惯量参数是链路里最容易糊弄、也最致命的一环：质量对、惯量错 10–20%，就足够毁掉全身控制与强化学习的实机迁移。MuJoCo Menagerie 里有 G1、H1、Apollo 的现成模型，拿它对账自己导出的数值，比对着 CAD 一格格抄快得多。</p>
+  <p>最后是三个真实取舍。Atlas 在 2024 年 4 月从液压改成全电：液压的力矩密度与抗冲击好，但效率低、密封与维护贵；电驱的带宽、能效与控制自由度更高，代价是散热与减速器寿命。Cassie 没有机械弹簧悬架，靠低减速比电机的反驱与连杆柔度吸收冲击，结构简单、成本低，代价是冲击直接进传动链，对编码器与减速器更狠。G1 走的是第三条路：35 kg、23 DoF、膝 90 N·m（2.6 N·m/kg），用低惯量内转子加交叉滚子轴承把成本压下来；H1 是 47 kg、膝 360 N·m（7.7 N·m/kg），静态需求只有 69 N·m，余下的都是跑跳余量。同一个厂的两档产品，差别不在控制算法，在力矩密度。</p>
+
+  <h3>延伸阅读</h3>
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[01]</span>
+      <div>
+        <p class="paper-title">Modern Robotics: Mechanics, Planning, and Control</p>
+        <p class="paper-meta">Kevin Lynch、Frank Park · 剑桥大学出版社，2017 · 指数积、雅可比与逆解的免费预印本与代码</p>
+      </div>
+      <a class="paper-link" href="https://hades.mech.northwestern.edu/index.php/Modern_Robotics">教材页 ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[02]</span>
+      <div>
+        <p class="paper-title">Series Elastic Actuators</p>
+        <p class="paper-meta">Gill Pratt、Matthew Williamson · IROS，1995 · 用弹簧把力控与冲击解耦的起点</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/IROS.1995.525827">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[03]</span>
+      <div>
+        <p class="paper-title">Proprioceptive Actuator Design in the MIT Cheetah</p>
+        <p class="paper-meta">Patrick Wensing 等 · IEEE T-RO，2017 · 低减速比、大半径电机的设计准则与冲击指标</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/TRO.2016.2640183">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[04]</span>
+      <div>
+        <p class="paper-title">The MIT Humanoid Robot: Design, Motion Planning, and Control For Acrobatic Behaviors</p>
+        <p class="paper-meta">Matthew Chignoli 等 · arXiv，2021 · 把执行器的力矩-速度-功率极限直接写进规划</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2104.09025">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[05]</span>
+      <div>
+        <p class="paper-title">Inertial Properties in Robotic Manipulation: An Object-Level Framework</p>
+        <p class="paper-meta">Oussama Khatib · IJRR，1995 · 操作空间惯量矩阵，解释末端惯量如何决定力控品质</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1177/027836499501400103">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[06]</span>
+      <div>
+        <p class="paper-title">MuJoCo Menagerie</p>
+        <p class="paper-meta">Google DeepMind · 开源模型库 · G1、H1、Apollo 的 URDF/MJCF，可用来对账惯量</p>
+      </div>
+      <a class="paper-link" href="https://github.com/google-deepmind/mujoco_menagerie">GitHub ↗</a>
+    </li>
+  </ol>
+
+  <section class="takeaways" data-takeaways aria-labelledby="ch02-takeaways">
+    <p class="kicker" id="ch02-takeaways">本章要点 <span>Takeaways</span></p>
+    <ol>
+      <li><strong>自由度是预算，不是指标。</strong>多数机型 12 个下肢关节是站稳的硬需求（H1 用 10 个换轻量）；手臂 4、5 还是 7 决定作业能力；每多一个关节，多 0.3–0.6 kg、一对走线和一份标定。</li>
+      <li><strong>逆解永远有两组，选哪组由机械限位决定。</strong>数值解必须拿上一帧做初值，否则会在膝前/膝后两个分支之间跳变。</li>
+      <li><strong>腿伸直时静态力矩最小、力控最差。</strong><span class="formula-inline">|det J| = L<sub>1</sub>L<sub>2</sub>|sin θ<sub>2</sub>|</span>，膝角 5° 时只剩最大值的 8.7%，设计留 5–15° 屈曲。</li>
+      <li><strong>选模组先看反射惯量与连续力矩。</strong>N = 100 的谐波把 1×10⁻⁵ kg·m² 的转子惯量放大成 0.1 kg·m²，与小腿绕膝的负载惯量（0.11 kg·m²）同量级；腿要力控选 N ≈ 9 的 QDD，臂要精度才用谐波。</li>
+    </ol>
+  </section>
+
+  <a class="next-chapter" href="#ch-03">
+    <span class="next-kicker">下一章 · Next</span>
+    <span class="next-title">03｜硬件系统：电机、驱动、传感、电源与算力</span>
+    <span class="next-arrow" aria-hidden="true">→</span>
+  </a>
+</section>

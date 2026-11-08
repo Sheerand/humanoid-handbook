@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>人形机器人全栈手册｜从连杆到 Sim2Real</title>
+<meta name="description" content="一本面向工程师与学生的技术读物：从机械设计、硬件系统、实时嵌入式，到动力学、步态、强化学习与感知操作，九个章节拆解一台人形机器人的全栈。">
+<meta name="theme-color" content="#F7F5F0">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23F7F5F0'/%3E%3Cg fill='none' stroke='%230E5A52' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='16' cy='7.5' r='3.4'/%3E%3Cpath d='M16 11v9M11.5 14h9M16 20l-3.5 6M16 20l3.5 6'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles/site.css">
+<script>document.documentElement.classList.replace('no-js', 'js');</script>
+</head>
+
+<body id="top">
+
+<a class="skip-link" href="#main">跳到正文</a>
+<div id="progress-bar" aria-hidden="true"></div>
+
+<!-- 顶栏：平板与手机 -->
+<header class="masthead">
+  <a class="masthead-brand" href="#top" aria-label="人形机器人全栈手册，返回顶部">
+    <span class="mb-cn">人形机器人全栈手册</span>
+    <span class="mb-en">FIELD MANUAL</span>
+  </a>
+
+  <nav class="quick-nav" aria-label="章节快速跳转">
+    <a class="quick-link" href="#ch-01" aria-label="第 01 章 全景"><span aria-hidden="true">01</span></a>
+    <a class="quick-link" href="#ch-02" aria-label="第 02 章 机械设计"><span aria-hidden="true">02</span></a>
+    <a class="quick-link" href="#ch-03" aria-label="第 03 章 硬件系统"><span aria-hidden="true">03</span></a>
+    <a class="quick-link" href="#ch-04" aria-label="第 04 章 嵌入式软件"><span aria-hidden="true">04</span></a>
+    <a class="quick-link" href="#ch-05" aria-label="第 05 章 动力学与全身控制"><span aria-hidden="true">05</span></a>
+    <a class="quick-link" href="#ch-06" aria-label="第 06 章 步态与 MPC"><span aria-hidden="true">06</span></a>
+    <a class="quick-link" href="#ch-07" aria-label="第 07 章 强化学习与 Sim2Real"><span aria-hidden="true">07</span></a>
+    <a class="quick-link" href="#ch-08" aria-label="第 08 章 感知与操作"><span aria-hidden="true">08</span></a>
+    <a class="quick-link" href="#ch-09" aria-label="第 09 章 路线图与论文索引"><span aria-hidden="true">09</span></a>
+  </nav>
+
+  <button class="menu-btn" id="menu-toggle" type="button" aria-controls="toc-drawer" aria-expanded="false">
+    <span class="menu-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span>目录</span>
+  </button>
+</header>
+
+<!-- 桌面竖向导航轨 -->
+<nav id="nav-rail" class="rail" aria-label="章节目录">
+  <a class="rail-brand" href="#top">
+    <span class="rail-brand-title">人形机器人全栈手册</span>
+    <span class="rail-brand-en">Humanoid Robotics · Field Manual</span>
+  </a>
+
+  <div class="rail-nav">
+    <ol class="rail-list">
+      <li><a class="nav-link" href="#ch-01"><span class="nav-num">01</span><span class="nav-cn">全景</span></a></li>
+      <li><a class="nav-link" href="#ch-02"><span class="nav-num">02</span><span class="nav-cn">机械设计</span></a></li>
+      <li><a class="nav-link" href="#ch-03"><span class="nav-num">03</span><span class="nav-cn">硬件系统</span></a></li>
+      <li><a class="nav-link" href="#ch-04"><span class="nav-num">04</span><span class="nav-cn">嵌入式软件</span></a></li>
+      <li><a class="nav-link" href="#ch-05"><span class="nav-num">05</span><span class="nav-cn">动力学与全身控制</span></a></li>
+      <li><a class="nav-link" href="#ch-06"><span class="nav-num">06</span><span class="nav-cn">步态与 MPC</span></a></li>
+      <li><a class="nav-link" href="#ch-07"><span class="nav-num">07</span><span class="nav-cn">强化学习与 Sim2Real</span></a></li>
+      <li><a class="nav-link" href="#ch-08"><span class="nav-num">08</span><span class="nav-cn">感知与操作</span></a></li>
+      <li><a class="nav-link" href="#ch-09"><span class="nav-num">09</span><span class="nav-cn">路线图与论文</span></a></li>
+    </ol>
+  </div>
+
+  <div class="rail-foot">
+    <div>EDITION 1.0 · 2026</div>
+    <div><a href="#ch-01">开始阅读 →</a></div>
+  </div>
+</nav>
+
+<!-- 移动端抽屉目录 -->
+<div id="toc-drawer" class="drawer" aria-hidden="true">
+  <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="章节目录">
+    <div class="drawer-head">
+      <div>
+        <div class="drawer-title">人形机器人全栈手册</div>
+        <div class="drawer-sub">Nine Chapters · The Whole Stack</div>
+      </div>
+      <button class="drawer-close" type="button" data-drawer-close aria-label="关闭目录">✕</button>
+    </div>
+
+    <ol class="drawer-list">
+      <li><a class="nav-link" href="#ch-01"><span class="nav-num">01</span><span><span class="nav-cn">全景：人形机器人到底难在哪</span><span class="nav-en">The Whole Stack</span></span></a></li>
+      <li><a class="nav-link" href="#ch-02"><span class="nav-num">02</span><span><span class="nav-cn">机械设计：自由度、连杆与关节模组</span><span class="nav-en">Mechanical Design</span></span></a></li>
+      <li><a class="nav-link" href="#ch-03"><span class="nav-num">03</span><span><span class="nav-cn">硬件系统：电机、驱动、传感、电源与算力</span><span class="nav-en">Hardware Systems</span></span></a></li>
+      <li><a class="nav-link" href="#ch-04"><span class="nav-num">04</span><span><span class="nav-cn">嵌入式软件：1 kHz 的实时世界</span><span class="nav-en">Real-Time Embedded</span></span></a></li>
+      <li><a class="nav-link" href="#ch-05"><span class="nav-num">05</span><span><span class="nav-cn">动力学与全身控制：让 30 个关节协同工作</span><span class="nav-en">Dynamics &amp; Whole-Body Control</span></span></a></li>
+      <li><a class="nav-link" href="#ch-06"><span class="nav-num">06</span><span><span class="nav-cn">步态与 MPC：从 ZMP 到预测控制</span><span class="nav-en">Gait &amp; Model Predictive Control</span></span></a></li>
+      <li><a class="nav-link" href="#ch-07"><span class="nav-num">07</span><span><span class="nav-cn">强化学习与 Sim2Real：在仿真里摔一百万次</span><span class="nav-en">Reinforcement Learning &amp; Sim2Real</span></span></a></li>
+      <li><a class="nav-link" href="#ch-08"><span class="nav-num">08</span><span><span class="nav-cn">感知、状态估计与操作：机器人的眼睛和手</span><span class="nav-en">Perception &amp; Manipulation</span></span></a></li>
+      <li><a class="nav-link" href="#ch-09"><span class="nav-num">09</span><span><span class="nav-cn">全栈路线图与经典论文索引</span><span class="nav-en">Roadmap &amp; Reading List</span></span></a></li>
+    </ol>
+
+    <div class="drawer-foot">
+      自包含单文件 · 无外部依赖<br>
+      EDITION 1.0 · 2026
+    </div>
+  </div>
+</div>
+
+<main id="main" tabindex="-1">
+
+  <!-- ======================================================================
+       英雄区 / HERO
+       ====================================================================== -->
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="wrap">
+      <div class="hero-inner">
+
+        <div class="hero-copy">
+          <p class="hero-kicker">A Full-Stack Field Manual <em>· 2026</em></p>
+
+          <h1 class="hero-title" id="hero-title">
+            <span class="t-line">人形机器人</span>
+            <span class="t-line">全栈手册<span class="t-mark" aria-hidden="true">.</span></span>
+          </h1>
+
+          <p class="hero-en">Humanoid Robotics — From Linkage to Sim2Real</p>
+
+          <p class="hero-sub">把一台人形机器人拆开：机械、硬件、实时软件、动力学、步态、强化学习与感知。九个章节，一条从图纸到实机的完整路径。</p>
+
+          <div class="hero-actions">
+            <a class="btn btn--solid" href="#ch-01">开始阅读 <span class="btn-arrow" aria-hidden="true">→</span></a>
+            <a class="btn btn--ghost" href="#map">查看全书地图</a>
+          </div>
+
+          <div class="hero-stats">
+            <div class="stat">
+              <span class="stat-value">09<small>章</small></span>
+              <span class="stat-label">Chapters</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">05<small>学科</small></span>
+              <span class="stat-label">Disciplines</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">1<small>kHz</small></span>
+              <span class="stat-label">Control Loop</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">30<small>+</small></span>
+              <span class="stat-label">DoF</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-figure">
+          <svg viewBox="0 0 300 400" role="img" aria-labelledby="hero-fig-title hero-fig-desc">
+            <title id="hero-fig-title">人形机器人行走循环线稿</title>
+            <desc id="hero-fig-desc">侧视线稿人形机器人，以 2.6 秒为周期摆动髋、膝与肩关节，脚下地面带刻度标尺。</desc>
+
+            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="150" cy="204" r="138" stroke-width=".7" stroke-opacity=".09"/>
+              <circle cx="150" cy="204" r="114" stroke-width=".6" stroke-opacity=".06" stroke-dasharray="2 7"/>
+
+              <g stroke-width=".8" stroke-opacity=".3">
+                <line x1="40" y1="368" x2="260" y2="368"/>
+                <line x1="60" y1="368" x2="60" y2="374"/>
+                <line x1="80" y1="368" x2="80" y2="373"/>
+                <line x1="100" y1="368" x2="100" y2="374"/>
+                <line x1="120" y1="368" x2="120" y2="373"/>
+                <line x1="140" y1="368" x2="140" y2="374"/>
+                <line x1="160" y1="368" x2="160" y2="373"/>
+                <line x1="180" y1="368" x2="180" y2="374"/>
+                <line x1="200" y1="368" x2="200" y2="373"/>
+                <line x1="220" y1="368" x2="220" y2="374"/>
+                <line x1="240" y1="368" x2="240" y2="373"/>
+              </g>
+
+              <ellipse cx="156" cy="367" rx="54" ry="3.4" fill="currentColor" stroke="none" opacity=".06"/>
+
+              <g class="body-bob">
+
+                <!-- 远侧肢体 -->
+                <g stroke-opacity=".34" stroke-width="1.1">
+                  <g class="j-sh-b">
+                    <path d="M139 132 L121 182 L129 224"/>
+                    <circle cx="121" cy="182" r="2.4"/>
+                    <circle cx="129" cy="224" r="2.4"/>
+                  </g>
+                  <g class="j-hip-b">
+                    <path d="M142 226 L136 292"/>
+                    <g class="j-knee-b">
+                      <path d="M136 292 L132 352 M132 352 L152 357"/>
+                      <circle cx="136" cy="292" r="2.4"/>
+                      <circle cx="132" cy="352" r="2.4"/>
+                    </g>
+                    <circle cx="142" cy="226" r="2.4"/>
+                  </g>
+                </g>
+
+                <!-- 躯干与头 -->
+                <path d="M139 126 C141 148 141 164 141 182 L163 182 C163 162 162 146 161 126 Z" stroke-width="1.4"/>
+                <path d="M139 126 L161 126" stroke-width="1.4"/>
+                <path d="M146 182 L158 182 L158 204 L146 204 Z" stroke-width="1.2"/>
+                <path d="M137 204 L163 204 L166 231 L134 231 Z" stroke-width="1.4"/>
+                <path d="M146 140 L156 140 M146 148 L154 148" stroke-width=".8" stroke-opacity=".35"/>
+                <path d="M151 108 L151 126" stroke-width="1.4"/>
+                <circle cx="154" cy="90" r="18" stroke-width="1.4"/>
+                <circle cx="160.5" cy="88" r="1.1" fill="currentColor" stroke="none" opacity=".85"/>
+
+                <!-- 近侧腿 -->
+                <g class="j-hip-a">
+                  <path d="M150 226 L154 292" stroke-width="1.5"/>
+                  <g class="j-knee-a">
+                    <path d="M154 292 L150 352 M150 352 L174 357" stroke-width="1.5"/>
+                    <path d="M143 358 L174 358" stroke-width="1.1" opacity=".5"/>
+                    <circle class="joint-hl" cx="154" cy="292" r="2.8"/>
+                    <circle cx="150" cy="352" r="2.8"/>
+                  </g>
+                  <circle class="joint-hl" cx="150" cy="226" r="3.2"/>
+                </g>
+
+                <!-- 近侧臂 -->
+                <g class="j-sh-a">
+                  <path d="M161 132 L179 182 L171 226" stroke-width="1.5"/>
+                  <circle class="joint-hl" cx="179" cy="182" r="2.6"/>
+                  <circle cx="171" cy="226" r="2.6"/>
+                </g>
+
+              </g>
+            </g>
+          </svg>
+
+          <div class="hero-fig-cap">
+            <span><b>FIG. 0</b> · 行走循环</span>
+            <span>2.60 s / cycle</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================================
+       全书地图 / BOOK MAP
+       ====================================================================== -->
+  <section class="bookmap" id="map" aria-labelledby="map-title">
+    <div class="wrap">
+      <div class="bookmap-head">
+        <div>
+          <p class="kicker">The Map <span>全书地图</span></p>
+          <h2 id="map-title">九章，一条从图纸到实机的路径</h2>
+        </div>
+        <div>
+          <p class="bookmap-note">可以顺序读，也可以按问题跳读。每章独立成篇，但共享同一套符号、单位与坐标系约定。</p>
+          <div class="diff-legend" aria-label="难度从 D1 到 D5">
+            <span>难度</span>
+            <span class="diff" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+            <span>D1 → D5</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="map-grid">
+
+        <a class="map-card" href="#ch-01">
+          <div class="map-top"><span class="map-num">01</span><span class="map-kicker">The Whole Stack</span></div>
+          <span class="map-title">全景：人形机器人到底难在哪</span>
+          <span class="map-desc">先建立整机视角：能量、信息与控制如何闭合成一个环。</span>
+          <div class="map-foot"><span class="diff-label">难度</span><span class="diff" role="img" aria-label="难度 2，共 5 级"><i></i><i></i><i class="off"></i><i class="off"></i><i class="off"></i></span></div>
+        </a>
+
+        <a class="map-card" href="#ch-02">
+          <div class="map-top"><span class="map-num">02</span><span class="map-kicker">Mechanical Design</span></div>
+          <span class="map-title">机械设计：自由度、连杆与关节模组</span>
+          <span class="map-desc">自由度怎么分配，关节模组怎样把扭矩装进一百克。</span>
+          <div class="map-foot"><span class="diff-label">难度</span><span class="diff" role="img" aria-label="难度 3，共 5 级"><i></i><i></i><i></i><i class="off"></i><i class="off"></i></span></div>
+        </a>
+
+        <a class="map-card" href="#ch-03">
+          <div class="map-top"><span class="map-num">03</span><span class="map-kicker">Hardware Systems</span></div>
+          <span class="map-title">硬件系统：电机、驱动、传感、电源与算力</span>
+          <span class="map-desc">五条供应链拼成一台机器，任何一条都能决定成败。</span>
+          <div class="map-foot"><span class="diff-label">难度</span><span class="diff" role="img" aria-label="难度 3，共 5 级"><i></i><i></i><i></i><i class="off"></i><i class="off"></i></span></div>
+        </a>
+
+        <a class="map-card" href="#ch-04">
+          <div class="map-top"><span class="map-num">04</span><span class="map-kicker">Real-Time Embedded</span></div>
+          <span class="map-title">嵌入式软件：1 kHz 的实时世界</span>
+          <span class="map-desc">在一毫秒的硬实时里，每一个微秒都要有归宿。</span>
+          <div class="map-foot"><span class="diff-label">难度</span><span class="diff" role="img" aria-label="难度 4，共 5 级"><i></i><i></i><i></i><i></i><i class="off"></i></span></div>
+        </a>
+
+        <a class="map-card" href="#ch-05">
+          <div class="map-top"><span class="map-num">05</span><span class="map-kicker">Dynamics &amp; Whole-Body Control</span></div>
+          <span class="map-title">动力学与全身控制：让 30 个关节协同工作</span>
+          <span class="map-desc">三十个关节、六维接触，把力分配到该去的地方。</span>
+          <div class="map-foot"><span class="diff-label">难度</span><span class="diff" role="img" aria-label="难度 5，共 5 级"><i></i><i></i><i></i><i></i><i></i></span></div>
+        </a>
+
+        <a class="map-card" href="#ch-06">
+          <div class="map-top"><span class="map-num">06</span><span class="map-kicker">Gait &amp; Model Predictive Control</span></div>
+          <span class="map-title">步态与 MPC：从 ZMP 到预测控制</span>
+          <span class="map-desc">从零矩点到质心动力学，预测未来一秒的落脚点。</span>
+          <div class="map-foot"><span class="diff-label">难度</span><span class="diff" role="img" aria-label="难度 4，共 5 级"><i></i><i></i><i></i><i></i><i class="off"></i></span></div>
+        </a>
+
+        <a class="map-card" href="#ch-07">
+          <div class="map-top"><span class="map-num">07</span><span class="map-kicker">Reinforcement Learning &amp; Sim2Real</span></div>
+          <span class="map-title">强化学习与 Sim2Real：在仿真里摔一百万次</span>
+          <span class="map-desc">在仿真里摔一百万次，换现实世界中的一次站稳。</span>
+          <div class="map-foot"><span class="diff-label">难度</span><span class="diff" role="img" aria-label="难度 4，共 5 级"><i></i><i></i><i></i><i></i><i class="off"></i></span></div>
+        </a>
+
+        <a class="map-card" href="#ch-08">
+          <div class="map-top"><span class="map-num">08</span><span class="map-kicker">Perception &amp; Manipulation</span></div>
+          <span class="map-title">感知、状态估计与操作：机器人的眼睛和手</span>
+          <span class="map-desc">眼睛、前庭与手：状态估计如何收敛到毫米级。</span>
+          <div class="map-foot"><span class="diff-label">难度</span><span class="diff" role="img" aria-label="难度 4，共 5 级"><i></i><i></i><i></i><i></i><i class="off"></i></span></div>
+        </a>
+
+        <a class="map-card" href="#ch-09">
+          <div class="map-top"><span class="map-num">09</span><span class="map-kicker">Roadmap &amp; Reading List</span></div>
+          <span class="map-title">全栈路线图与经典论文索引</span>
+          <span class="map-desc">一条可执行的自学路径，配一份读过再读的论文清单。</span>
+          <div class="map-foot"><span class="diff-label">难度</span><span class="diff" role="img" aria-label="难度 2，共 5 级"><i></i><i></i><i class="off"></i><i class="off"></i><i class="off"></i></span></div>
+        </a>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================================
+       章节内容 / CHAPTERS
+       ====================================================================== -->
+  <!-- SECTIONS -->
+
+</main>
+
+<footer class="site-footer" aria-labelledby="footer-title">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-block">
+        <h3 id="footer-title">Colophon</h3>
+        <p class="footer-colophon">人形机器人全栈手册
+          <span>Humanoid Robotics · A Full-Stack Field Manual<br>Edition 1.0 · 2026</span>
+        </p>
+      </div>
+
+      <div class="footer-block">
+        <h3>免责声明</h3>
+        <p>本站为个人学习整理的技术读物。数据、参数与结论来自公开论文、厂商文档与开源项目，可能存在转述误差；引用、复现或用于工程决策前，请核对原始文献。</p>
+      </div>
+
+      <div class="footer-block">
+        <h3>技术说明</h3>
+        <p>构建产物为自包含单文件：样式、脚本、图示全部内联，无外部字体、CDN 或追踪代码，断网可读。图示为手绘 SVG，非工程图纸。</p>
+      </div>
+    </div>
+
+    <div class="footer-base">
+      <span class="footer-end">End of Manual · 09 / 09</span>
+      <span>© 2026 · 保留所有权利</span>
+      <a href="#top">回到顶部 ↑</a>
+    </div>
+  </div>
+</footer>
+
+<a id="to-top" href="#top" aria-label="回到顶部">↑</a>
+<div id="live-region" class="sr-only" aria-live="polite"></div>
+
+<script src="scripts/site.js"></script>
+</body>
+</html>

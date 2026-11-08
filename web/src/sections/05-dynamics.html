@@ -1,0 +1,773 @@
+<section class="chapter" id="ch-05" data-chapter="05">
+  <header class="chapter-head">
+    <div class="ch-meta">
+      <span class="ch-num" aria-hidden="true">05</span>
+      <p class="kicker">Dynamics &amp; Whole-Body Control</p>
+    </div>
+    <h2>动力学与全身控制：让 30 个关节协同工作</h2>
+    <p class="lede">上一章把接口定死在 1 kHz：给定关节角与关节速度，写回 30 个力矩。这一章算的就是这 30 个数。先把整机写成浮基方程，再把「站住、手到位、别打滑」写成带优先级与摩擦锥的二次规划，最后说清哪些项可以扔、哪些扔掉就会摔。</p>
+  </header>
+
+  <p>一台 35 kg 的 G1 站在地上，两只脚各承 172 N。最省事的控制是每个关节一个 PD：<span class="formula-inline">τ = K<sub>p</sub>(q<sub>d</sub> − q) − K<sub>d</sub> <span class="qdot">q</span></span>，重力用一个常数偏置抵消——这里 <span class="qdot">q</span> 是关节角速度（字母上一个点表示对时间的一阶导数，两个点是二阶导数，全章沿用）。原地站着，它工作得很好。</p>
+
+  <p>抬起右臂前伸 0.6 m，麻烦就来了。一只 2 kg 的手臂前移 0.6 m，整机质心（Center of Mass, CoM）跟着前移 2 × 0.6 / 35 ≈ 3.4 cm，两只踝合计需要多给 343 × 0.034 ≈ 12 N·m（343 N 是整机重量、两只脚平分，每侧约 6 N·m），才能把压力中心留在脚掌内。那个常数偏置对此一无所知，因为它不知道手臂在哪。这就是本章的动机：关节 PD 是局部的，而平衡是一个全局问题。</p>
+
+  <p>读完这一章，你应该能对任何一个人形动作回答三个问题：它需要多大的地面反力，这些反力是否落在摩擦锥内，对应的关节力矩是否超限。三个问题的答案最后都写进同一个二次规划（Quadratic Programming, QP）：目标函数是二次型、约束是线性不等式，每毫秒解一次。</p>
+
+  <p>先把本章会同时出现的几个数对齐。算例是 Unitree G1 的 23 个关节：广义坐标 <span class="formula-inline">q</span> = 23 个关节角 + 6 维浮基位姿 = 29 维；输入是 23 个关节力矩 + 12 个接触力分量（两只脚各 6 维）= 35 个；QP 把 29 个加速度和 35 个输入都当未知数，一共 64 个决策变量。标题与导语里的「30 个关节」是典型整机的量级，不是这台机器的数。</p>
+
+  <div class="stat-row" data-reveal>
+    <div class="stat"><span class="stat-value">29<small>维</small></span><span class="stat-label">广义坐标 q</span></div>
+    <div class="stat"><span class="stat-value">1<small>kHz</small></span><span class="stat-label">控制周期</span></div>
+    <div class="stat"><span class="stat-value">172<small>N</small></span><span class="stat-label">单腿法向力</span></div>
+    <div class="stat"><span class="stat-value">64<small>个</small></span><span class="stat-label">QP 决策变量</span></div>
+  </div>
+
+  <h2>浮基方程：29 个加速度，35 个输入</h2>
+
+  <p>这一节解决的问题：把「30 个关节怎么动」写成一行方程，并看清哪 6 个自由度没有电机。</p>
+
+  <p>第 2 章的结论 <span class="formula-inline">τ = J<sup>⊤</sup>F</span> 有一个前提：脚钉在地上。真实机器人没有钉子，脚只是压在地面上，随时可以离开。把这个前提去掉，整机就多出 6 个自由度——相对世界的 3 个平移与 3 个转动，它们没有任何电机直接驱动。这种基座不被固定的系统叫浮基（Floating Base）系统，多出来的 6 维就是浮基位姿。</p>
+
+  <div class="formula-block">
+    <span class="formula">M(q) <span class="qddot">q</span> + h(q, <span class="qdot">q</span>) = S<sup>⊤</sup> τ + Σ<sub>i</sub> J<sub>i</sub><sup>⊤</sup> f<sub>i</sub></span>
+    <span class="formula-no">5.1</span>
+  </div>
+
+  <p><strong>q</strong> 是 n+6 维广义坐标：n 个关节角，加上浮基的 6 维位姿。n=23 的整机，q 就是 29 维。姿态那 3 维不要用欧拉角微分，工程上用 SO(3) 上的旋转向量做误差，这里不展开。</p>
+
+  <p><strong>M(q)</strong> 是 29×29 的广义质量矩阵，三种块各有自己的量纲：平动块的对角元接近整机质量（35 kg），转动块是绕质心的惯量（量级 1–3 kg·m²），平移与转动的耦合块是 kg·m。它随姿态变化：腿伸直和蹲下，同一个关节的等效惯量能差 3 倍以上。</p>
+
+  <p><strong>h(q, <span class="qdot">q</span>)</strong> 把与速度、重力有关的项打包：科氏力、离心力、重力。它的单位是广义力，按分块说：前 3 个平移分量是 N，第 4–6 的转动分量是 N·m，后 23 个关节分量也是 N·m。这一项不需要求逆，递归牛顿—欧拉算法（Recursive Newton-Euler, RNEA）一次 O(n) 就能算完。</p>
+
+  <p><strong>S</strong> 是 29×23 的选择矩阵，作用是把 23 个关节力矩嵌进 29 维。它的前 6 行全是 0——这一片 0 就是欠驱动（Underactuated）的全部内容：独立输入数少于构型维数。</p>
+
+  <p><strong>J<sub>i</sub></strong> 是第 i 个接触点的 6×(n+6) 雅可比矩阵（Jacobian），<strong>f<sub>i</sub></strong> 是该点的六维力（3 个力加 3 个矩）。两只脚接触，就是 12 个力分量。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 310" role="img" aria-labelledby="ch05-fig1-title ch05-fig1-desc">
+        <title id="ch05-fig1-title">浮基方程的四个项与 29 行的结构</title>
+        <desc id="ch05-fig1-desc">左侧两个框是惯性力与科氏重力项，右侧两个框是关节力矩与接触力。下方把 29 行分成浮基 6 行与关节 23 行，标出关节力矩只进入后 23 行。</desc>
+
+        <text x="30" y="24" font-size="12" class="t-mono" style="fill:var(--muted-ink)">广义力平衡 · 29 行</text>
+
+        <rect x="30" y="38" width="232" height="50" fill="none" stroke="var(--line-2)" stroke-width="1"/>
+        <text x="42" y="58" font-size="14" style="fill:var(--ink)">惯性力 M(q) · a</text>
+        <text x="42" y="78" font-size="12" style="fill:var(--muted-ink)">29×29 矩阵 × 29 维加速度</text>
+
+        <rect x="30" y="100" width="232" height="50" fill="none" stroke="var(--line-2)" stroke-width="1"/>
+        <text x="42" y="120" font-size="14" style="fill:var(--ink)">科氏、离心与重力 h</text>
+        <text x="42" y="140" font-size="12" style="fill:var(--muted-ink)">与速度平方成正比，O(n) 可算</text>
+
+        <text x="286" y="100" font-size="22" text-anchor="middle" style="fill:var(--ink-2)">=</text>
+
+        <rect x="300" y="38" width="270" height="50" fill="none" stroke="var(--line-2)" stroke-width="1"/>
+        <text x="312" y="58" font-size="14" style="fill:var(--ink)">关节力矩 S<tspan font-size="11" dy="-4">⊤</tspan><tspan dy="4">τ</tspan></text>
+        <text x="312" y="78" font-size="12" style="fill:var(--muted-ink)">23 个电机，只进后 23 行</text>
+
+        <rect x="300" y="100" width="270" height="50" fill="none" stroke="var(--line-2)" stroke-width="1"/>
+        <text x="312" y="120" font-size="14" style="fill:var(--ink)">接触力 Σ Jᵢ<tspan font-size="11" dy="-4">⊤</tspan><tspan dy="4">fᵢ</tspan></text>
+        <text x="312" y="140" font-size="12" style="fill:var(--muted-ink)">2 脚 × 6 = 12 个分量，进全部 29 行</text>
+
+        <line x1="30" y1="164" x2="570" y2="164" stroke="var(--line)" stroke-width="1"/>
+
+        <text x="210" y="180" font-size="12" text-anchor="middle" class="t-mono" style="fill:var(--muted-ink)">29 行</text>
+
+        <rect x="170" y="186" width="80" height="23" style="fill:var(--d1);fill-opacity:.12" stroke="var(--ink-2)" stroke-width="1.2"/>
+        <rect x="170" y="209" width="80" height="72" fill="none" stroke="var(--ink-2)" stroke-width="1.2"/>
+        <line x1="170" y1="209" x2="250" y2="209" stroke="var(--ink-2)" stroke-width="1.2"/>
+        <text x="259" y="201" font-size="13" style="fill:var(--signal-ink)">S⊤τ ≡ 0</text>
+        <text x="259" y="247" font-size="12" style="fill:var(--ink-2)">S⊤τ 与 J⊤f 都在</text>
+
+        <text x="162" y="201" font-size="12" text-anchor="end" style="fill:var(--ink-2)">第 1–6 行 · 浮基</text>
+        <text x="162" y="247" font-size="12" text-anchor="end" style="fill:var(--ink-2)">第 7–29 行 · 关节</text>
+
+        <text x="30" y="300" font-size="12" style="fill:var(--muted-ink)">29 个未知加速度、35 个输入；前 6 行没有电机，这就是欠驱动。</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 5.1</span>浮基方程两边的四个项，以及 29 行里哪些行有电机力矩。以 n=23 的整机为例，接触力取双脚。
+      <span class="fig-note read-for">读者应看出：关节力矩只作用在后 23 行，前 6 行（整机的平移与转动）没有任何执行器——基座只能被接触力推动。</span>
+      <span class="fig-src">来源：作者绘制，维度按 n=23、双脚接触计算。</span>
+    </figcaption>
+  </figure>
+
+  <p>欠驱动的后果很具体。机器人腾空时 f=0，方程前 6 行退化成 M<sub>bb</sub> <span class="qddot">q</span><sub>b</sub> + h<sub>b</sub> = 0：基座只能做自由落体，任何关节力矩都改不了质心轨迹。跳起来之后想调整姿态，只能靠角动量守恒——甩腿、摆臂，质心不动，身体反着转。猫在空中翻身用的是同一套物理。</p>
+
+  <p>计算成本决定了实现方式。n=23 时，一次 RNEA 在 1 kHz 循环里占 5–20 µs（量级估计），而显式构造 M 再求它的逆要贵 2–4 倍，还要处理 29×29 矩阵的数值条件。所以全身控制（Whole-Body Control, WBC）的实现几乎都不显式求 M<sup>−1</sup>，而是用 RNEA 直接算 <span class="formula-inline">M<span class="qddot">q</span> + h</span> 这个乘积。</p>
+
+  <h2>质心动力学：6 行方程能回答什么</h2>
+
+  <p>这一节解决的问题：为什么工业系统敢用一个质点加几个接触力来规划，代价是什么。</p>
+
+  <p>把式 5.1 的 29 行按「平动 3 + 转动 3 + 关节 23」重新分组，前 6 行可以消掉所有关节内力。原因很具体：关节力矩作用在相邻两根连杆上，大小相等、方向相反，把 29 行按连杆逐个相加时，每个 τ 都出现两次、符号相反，成对抵消。剩下的外力只有重力与地面接触力，所以下面这 6 行里没有 τ。剩下的就是质心动力学（centroidal dynamics）：</p>
+
+  <div class="formula-block">
+    <span class="formula">m <span class="qddot">c</span> = Σ<sub>i</sub> f<sub>i</sub> + m g,&nbsp;&nbsp;&nbsp; <span class="qdot">L</span> = Σ<sub>i</sub> (p<sub>i</sub> − c) × f<sub>i</sub></span>
+    <span class="formula-no">5.2</span>
+  </div>
+
+  <p>m 是整机质量（kg），c 是质心位置（m），L 是绕质心的角动量（kg·m²/s），p<sub>i</sub> 是接触点位置（m）。第一式是牛顿方程，第二式是欧拉方程。6 个未知量（c 与 L 各 3 个分量）完整描述了「整机怎么动」的外层。</p>
+
+  <h3>能回答的与不能回答的</h3>
+
+  <p>它能回答三类问题：整机往哪加速（第一式）、会不会翻倒（第二式的力矩平衡）、脚最多能出多大力（受摩擦锥限制）。这三个答案足够支撑规划层：0.5–1.6 s 的质心轨迹、落脚点、接触力参考，都在这一层算出来。</p>
+
+  <p>它不能回答另外三类：每个关节该出多少力矩（那要回到 29 维）、摆动腿的反作用（被平均掉了）、接触力在双脚之间怎么分配（12 个分量只有 6 个方程）。这也是下一节要处理的问题。</p>
+
+  <p>给一组具体数：60 kg 单腿支撑，法向力 589 N。μ=0.5 时最大水平加速度 4.9 m/s²，想要 1 m/s² 只需要 μ=0.10。慢走对摩擦的要求很低，难的是急停与变向：从 2 m/s 在 0.3 s 内停住需要 6.7 m/s²，已经超过 μ=0.5 的上限，必须两步完成。</p>
+
+  <p>单刚体模型的误差来自腿的摆动。1 Hz 步频行走时，两条腿的摆动角动量约占整机的 5–10%；步频提到 3 Hz、或者做快速摆腿，占比可到 20–30%（量级估计）。这就是分层的依据：MPC 用单刚体模型（Single Rigid Body Dynamics, SRBD）规划质心，10% 的误差可以接受；WBC 用全模型算力矩，因为力矩上限是硬约束——H1 膝 360 N·m 的峰值只能短时使用，算错 10% 就可能触发限幅。两者靠「质心状态 + 期望接触力」这 12 个数的窄接口耦合。</p>
+
+  <h2>接触：三条不等式</h2>
+
+  <p>这一节解决的问题：把「脚踩在地上」翻译成优化器能读的约束，并看清接触切换的那几毫秒里发生了什么。</p>
+
+  <p>接触是这一章所有难度的来源。它不连续（脚可以离开）、单边（地面只能推不能拉）、还带摩擦（切向力有上限）。三条不等式概括：</p>
+
+  <div class="formula-block">
+    <span class="formula">f<sub>z</sub> ≥ 0,&nbsp;&nbsp; √(f<sub>x</sub><sup>2</sup> + f<sub>y</sub><sup>2</sup>) ≤ μ f<sub>z</sub>,&nbsp;&nbsp; p<sub>cop</sub> ∈ 支撑多边形</span>
+    <span class="formula-no">5.3</span>
+  </div>
+
+  <p>第一条是单边约束（unilateral constraint）。工程上写 f<sub>z</sub> ≥ 20 N 而不是 ≥ 0：QP 会在边界上抖，0.001 N 的法向力在数值上等于没有接触，而摩擦锥允许的切向力也趋近 0，解会在「接触」与「不接触」之间跳。</p>
+
+  <p>第二条是摩擦锥（friction cone）。μ 是摩擦系数，橡胶对干燥混凝土 0.6–1.0，冰面 0.1。锥面是二次约束，优化器不喜欢，工程上用 4–8 边的棱锥近似：8 边时切向力最多损失 cos 22.5° = 7.6%，4 边损失 29%，所以 8 边是常见折中。</p>
+
+  <p>第三条是压力中心（Center of Pressure, CoP）必须落在支撑多边形（support polygon）内。CoP 是地面反力合力的作用点；它一旦出界，地面反力对脚边缘的力矩就会让脚开始翻转。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 340" role="img" aria-labelledby="ch05-fig2-title ch05-fig2-desc">
+        <title id="ch05-fig2-title">打滑上限与翻倒上限随摩擦系数的变化</title>
+        <desc id="ch05-fig2-desc">横轴为摩擦系数 0 到 1.2，纵轴为最大水平加速度 0 到 12 米每二次方秒。打滑上限 μg 从原点线性上升，翻倒上限恒为 1.31 米每二次方秒，两者在摩擦系数 0.13 处相交。阴影区为可行加速度。</desc>
+
+        <g stroke="var(--line)" stroke-width=".5" stroke-dasharray="2 4">
+          <line x1="96" y1="282" x2="556" y2="282"/>
+          <line x1="96" y1="242.3" x2="556" y2="242.3"/>
+          <line x1="96" y1="202.7" x2="556" y2="202.7"/>
+          <line x1="96" y1="163" x2="556" y2="163"/>
+          <line x1="96" y1="123.3" x2="556" y2="123.3"/>
+          <line x1="96" y1="83.7" x2="556" y2="83.7"/>
+          <line x1="96" y1="44" x2="556" y2="44"/>
+        </g>
+
+        <polygon points="96,282 147,256.1 556,256.1 556,282" style="fill:var(--d1);fill-opacity:.07"/>
+
+        <line x1="96" y1="256.1" x2="556" y2="256.1" stroke="var(--d2)" stroke-width="1.5"/>
+        <line x1="96" y1="282" x2="556" y2="48.6" stroke="var(--d1)" stroke-width="1.5"/>
+
+        <line x1="96" y1="282" x2="556" y2="282" stroke="var(--line-2)" stroke-width="1"/>
+        <line x1="96" y1="282" x2="96" y2="44" stroke="var(--line-2)" stroke-width="1"/>
+
+        <g class="t-mono" font-size="12" style="fill:var(--muted-ink)">
+          <text x="96" y="300" text-anchor="middle">0</text>
+          <text x="172.7" y="300" text-anchor="middle">0.2</text>
+          <text x="249.3" y="300" text-anchor="middle">0.4</text>
+          <text x="326" y="300" text-anchor="middle">0.6</text>
+          <text x="402.7" y="300" text-anchor="middle">0.8</text>
+          <text x="479.3" y="300" text-anchor="middle">1.0</text>
+          <text x="556" y="300" text-anchor="middle">1.2</text>
+          <text x="86" y="286" text-anchor="end">0</text>
+          <text x="86" y="246.3" text-anchor="end">2</text>
+          <text x="86" y="206.7" text-anchor="end">4</text>
+          <text x="86" y="167" text-anchor="end">6</text>
+          <text x="86" y="127.3" text-anchor="end">8</text>
+          <text x="86" y="87.7" text-anchor="end">10</text>
+          <text x="86" y="48" text-anchor="end">12</text>
+        </g>
+
+        <text x="556" y="322" font-size="12" text-anchor="end" style="fill:var(--ink-2)">摩擦系数 μ</text>
+        <text x="46" y="163" font-size="12" text-anchor="middle" transform="rotate(-90 46 163)" style="fill:var(--ink-2)">水平加速度上限 a<tspan font-size="9" dy="3">x</tspan><tspan dy="-3"> / (m/s²)</tspan></text>
+
+        <circle cx="134.3" cy="262.5" r="3" style="fill:var(--d1)"/>
+        <circle cx="287.7" cy="184.7" r="3" style="fill:var(--d1)"/>
+        <circle cx="441" cy="106.9" r="3" style="fill:var(--d1)"/>
+        <circle cx="147" cy="256.1" r="3.5" style="fill:var(--d4)"/>
+
+        <text x="138" y="214" font-size="12" style="fill:var(--ink)">冰 μ≈0.1</text>
+        <line x1="134.3" y1="220" x2="134.3" y2="260" stroke="var(--line)" stroke-width=".8" stroke-dasharray="2 4"/>
+        <text x="278" y="176" font-size="12" text-anchor="end" style="fill:var(--ink)">木/混凝土 μ=0.5</text>
+        <text x="548" y="96" font-size="12" text-anchor="end" style="fill:var(--ink)">橡胶 μ=0.9</text>
+        <text x="152" y="248" font-size="12" style="fill:var(--d4)">μ* = 0.13</text>
+
+        <text x="550" y="250" font-size="12" text-anchor="end" style="fill:var(--d2)">翻倒上限 g·d/z<tspan font-size="9" dy="3">c</tspan><tspan dy="-3"> = 1.31</tspan></text>
+
+        <g font-size="12" style="fill:var(--ink-2)">
+          <line x1="112" y1="56" x2="136" y2="56" stroke="var(--d1)" stroke-width="1.5"/>
+          <text x="142" y="60">打滑上限 μ(g+a<tspan font-size="9" dy="3">z</tspan><tspan dy="-3">)</tspan></text>
+          <line x1="112" y1="74" x2="136" y2="74" stroke="var(--d2)" stroke-width="1.5"/>
+          <text x="142" y="78">翻倒上限 g·d/z<tspan font-size="9" dy="3">c</tspan></text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 5.2</span>两种约束给出的水平加速度上限：打滑 μ(g+a<sub>z</sub>) 与翻倒 g·d/z<sub>c</sub>。取质心高 z<sub>c</sub> = 0.9 m、脚掌半长 d = 0.12 m、a<sub>z</sub> = 0。
+      <span class="fig-note read-for">读者应看出：μ 大于 0.13 之后，限制你的不再是摩擦而是翻倒；只有冰面（μ≈0.1）才轮到打滑先发生。</span>
+      <span class="fig-src">来源：作者按刚体静力学绘制，g=9.81 m/s²。</span>
+    </figcaption>
+  </figure>
+
+  <p>图 5.2 的两个上限值得记住。脚长 0.24 m、质心高 0.9 m 时，静态翻倒上限是 9.81 × 0.12 / 0.9 = 1.31 m/s²，与 μ 无关；打滑上限是 μ(g+a<sub>z</sub>)。两者在 μ = 0.13 处相交。这意味着在木地板或混凝土上，先限制你的是翻倒而不是打滑；只有冰面那种 μ≈0.1 的场合，打滑才是主约束。一个常见误判是在光滑地面上调好的步态，到了打磨过的水泥地并不会滑，但会前后点头——因为约束从摩擦换成了翻倒力矩。</p>
+
+  <section class="demo" data-demo="friction-cone" aria-labelledby="demo51-title">
+    <div class="demo-bar">
+      <span class="demo-live"><i aria-hidden="true"></i>Live</span>
+      <h4 class="demo-title" id="demo51-title">摩擦锥：加速度要先过摩擦这一关</h4>
+      <span class="demo-tag">Demo 5.1</span>
+    </div>
+
+    <div class="demo-stage">
+      <canvas id="demo51-canvas" width="640" height="240" role="img" aria-label="侧视图：支撑脚、质心、地面反力矢量与摩擦锥；合力穿出锥体即表示打滑">摩擦锥示意：滑块改变竖直加速度、水平加速度、摩擦系数与总质量，地面反力矢量离开锥体即表示打滑。</canvas>
+    </div>
+
+    <div class="demo-controls">
+      <div class="demo-ctl">
+        <label for="demo51-az">竖直 a<sub>z</sub></label>
+        <input id="demo51-az" type="range" min="-5" max="5" step="0.1" value="0">
+        <output class="demo-out" for="demo51-az" id="demo51-az-out">0.0</output>
+      </div>
+      <div class="demo-ctl">
+        <label for="demo51-ax">水平 a<sub>x</sub></label>
+        <input id="demo51-ax" type="range" min="-8" max="8" step="0.1" value="0">
+        <output class="demo-out" for="demo51-ax" id="demo51-ax-out">0.0</output>
+      </div>
+      <div class="demo-ctl">
+        <label for="demo51-mu">摩擦 μ</label>
+        <input id="demo51-mu" type="range" min="0.1" max="1.2" step="0.05" value="0.5">
+        <output class="demo-out" for="demo51-mu" id="demo51-mu-out">0.50</output>
+      </div>
+      <div class="demo-ctl">
+        <label for="demo51-mass">质量 m</label>
+        <input id="demo51-mass" type="range" min="30" max="120" step="5" value="60">
+        <output class="demo-out" for="demo51-mass" id="demo51-mass-out">60</output>
+      </div>
+    </div>
+
+    <dl class="demo-readout">
+      <div><dt>法向力 F<sub>z</sub></dt><dd><span data-readout="fz">589</span><small>N</small></dd></div>
+      <div><dt>切向力 F<sub>x</sub></dt><dd><span data-readout="fx">0</span><small>N</small></dd></div>
+      <div><dt>所需 <span class="greek">μ<sub>min</sub></span></dt><dd><span data-readout="mumin">0.00</span><small>无量纲</small></dd></div>
+      <div><dt>当前 <span class="greek">μ</span> 的上限</dt><dd><span data-readout="axmax">4.9</span><small>m/s²</small></dd></div>
+    </dl>
+
+    <p class="demo-status" id="demo51-status" role="status" aria-live="polite">锥内：合力落在摩擦锥里，接触可以维持。</p>
+  </section>
+
+  <p>试两组数。先把 μ 拉到 0.10、a<sub>x</sub> 给 2 m/s²：锥的半角只剩 5.7°，合力立刻穿出去，读数里的 μ<sub>min</sub> 会显示 0.20——冰面上你连 2 m/s² 都拿不到。再把 μ 拉到 0.9，同样的加速度还剩一半余量。这就是「冰面几乎不能加速」的定量版本：μ=0.1 时上限是 0.98 m/s²，而走路时一次正常的减速都不止这个数。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch05-fig3-title ch05-fig3-desc">
+        <title id="ch05-fig3-title">双支撑与单支撑的支撑多边形，以及质心投影与压力中心的关系</title>
+        <desc id="ch05-fig3-desc">俯视图：两只脚各 0.24 米长、0.10 米宽，中心横向相距 0.20 米，凸包形成 0.24 乘 0.30 米的支撑多边形。质心投影在中心，压力中心比它靠前 0.06 米，仍在多边形内。</desc>
+
+        <g stroke="var(--ink-2)" stroke-width="1.2">
+          <line x1="70" y1="70" x2="112" y2="70" marker-end="url(#ch05-fig3-arrow)"/>
+          <line x1="70" y1="70" x2="70" y2="28" marker-end="url(#ch05-fig3-arrow)"/>
+        </g>
+        <text x="118" y="74" font-size="12" class="t-mono" style="fill:var(--ink-2)">x 前</text>
+        <text x="64" y="22" font-size="12" text-anchor="end" class="t-mono" style="fill:var(--ink-2)">y 左</text>
+
+        <rect x="252" y="110" width="96" height="40" fill="none" stroke="var(--ink-2)" stroke-width="1.5"/>
+        <rect x="252" y="190" width="96" height="40" fill="none" stroke="var(--ink-2)" stroke-width="1.5"/>
+        <rect x="252" y="110" width="96" height="120" style="fill:var(--d1);fill-opacity:.06" stroke="var(--d1)" stroke-width="1.2" stroke-dasharray="5 4"/>
+
+        <text x="244" y="134" font-size="12" text-anchor="end" style="fill:var(--muted-ink)">左脚</text>
+        <text x="244" y="214" font-size="12" text-anchor="end" style="fill:var(--muted-ink)">右脚</text>
+
+        <circle cx="300" cy="170" r="5" style="fill:var(--ink)"/>
+        <text x="292" y="162" font-size="12" text-anchor="end" style="fill:var(--ink)">c 投影</text>
+
+        <circle cx="324" cy="170" r="4.5" style="fill:var(--d2)"/>
+        <text x="334" y="166" font-size="12" style="fill:var(--ink)">CoP</text>
+
+        <text x="300" y="96" font-size="12" text-anchor="middle" style="fill:var(--ink-2)">双支撑多边形 0.24 × 0.30 m</text>
+        <text x="300" y="272" font-size="12" text-anchor="middle" style="fill:var(--muted-ink)">单支撑时缩到一只脚：0.24 × 0.10 m</text>
+
+        <g font-size="12" style="fill:var(--ink-2)">
+          <text x="380" y="180">CoP 比 c 投影前移 Δ = 0.06 m</text>
+          <text x="380" y="202">静态 · c 的投影要在界内</text>
+          <text x="380" y="224">动态 · CoP 在界内即可</text>
+          <text x="380" y="246" style="fill:var(--accent)">a<tspan font-size="9" dy="3">x</tspan><tspan dy="-3"> = g·Δ/z</tspan><tspan font-size="9" dy="3">c</tspan><tspan dy="-3"> = 0.65 m/s²</tspan></text>
+        </g>
+
+        <defs>
+          <marker id="ch05-fig3-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--ink-2)"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 5.3</span>俯视图下的支撑多边形与压力中心。质心投影在脚掌中心，CoP 前移 0.06 m 意味着整机正在以 0.65 m/s² 加速。
+      <span class="fig-note read-for">读者应看出：CoP 必须在多边形内，质心投影不必；两者的差值就是水平加速度。</span>
+      <span class="fig-src">来源：作者绘制，尺寸取 0.24 m 脚长、0.20 m 站距，z<sub>c</sub> = 0.9 m。</span>
+    </figcaption>
+  </figure>
+
+  <p>支撑多边形是俯视图里的凸包。双支撑时它是两只脚拼出的 0.24 × 0.30 m 矩形，单支撑时缩到一只脚的 0.24 × 0.10 m。注意一个容易搞混的点：CoP 必须在多边形内，质心投影不必。质心投影出界意味着整机在加速；只要 CoP 还在界内，这个加速度就是合法的——图 5.3 里 CoP 比质心投影靠前 0.06 m，对应 0.65 m/s²。</p>
+
+  <p>接触切换发生在几毫秒里。橡胶足底的法向刚度约 1×10⁵ N/m，承 589 N 只需压缩 5.9 mm；这 5.9 mm 在 5–10 ms 内走完（量级估计），冲击峰值可以到体重的 2–4 倍。控制器面对的真正问题不是力有多大，而是「我还不知道脚已经碰地」：接触检测有 5–30 ms 延迟，这段时间里 WBC 若按「已接触」计算，会算出一个不存在的地面反力，关节朝错误方向加速。工程做法是落地前把摆动腿的刚度从 2000 N/m 降到 300 N/m，用柔顺换时间。</p>
+
+  <aside class="callout callout--field" data-reveal>
+    <p class="callout-kicker">工程经验 <span>Field Note</span></p>
+    <p>同一个 μ 在不同地面上能差 5 倍：干混凝土 0.8，洒水的瓷砖 0.3，抛光金属上一层油膜 0.15。按 μ=0.8 规划的系统第一次进厨房就会滑；按 0.5 规划，等于把 37% 的推力余量当保险费。更稳的做法是把 μ 当随机变量，在 0.3–0.8 上做鲁棒设计——第 7 章把摩擦区间开到 0.1–2.0，就是为了让策略见过最坏情况。</p>
+  </aside>
+
+  <h2>全身控制：任务、优先级与零空间</h2>
+
+  <p>这一节解决的问题：把「站住、手到位、身体别歪」写成一个有优先级的优化问题，并说清为什么必须是 QP 而不是伪逆。</p>
+
+  <p>一台 23 自由度的人形同时要满足五类任务：质心 3 维、躯干姿态 3 维、摆动脚 6 维、手 6 维、关节姿态 23 维。加起来 41 维，而 <span class="qddot">q</span> 只有 29 维。任务多于自由度，冲突是常态：手往前伸要求躯干前倾，躯干前倾又把质心推出支撑多边形。</p>
+
+  <p>零空间（Null Space）是解决冲突的基本工具。高优先级的那 6 维任务——质心位置 3 维加躯干姿态 3 维——用掉 6 个方向，剩下 29 − 6 = 23 个方向可以任意动，而且完全不影响质心位置，也不影响躯干姿态；这 23 维就是这组任务的零空间。注意口径：如果只算质心位置这 3 维，零空间是 29 − 3 = 26 维；本章后面说的 23 维，指的都是把躯干姿态也算进高层任务的版本。</p>
+
+  <div class="formula-block">
+    <span class="formula"><span class="qddot">q</span><span class="op">=</span>J<sup>+</sup>(a<sup>*</sup><span class="op">−</span><span class="qdot">J</span><span class="qdot">q</span>)<span class="op">+</span>(I<span class="op">−</span>J<sup>+</sup>J)<span class="qddot">q</span><sub>0</sub></span>
+    <span class="formula-no">5.4</span>
+  </div>
+
+  <p>J<sup>+</sup> 是伪逆（pseudo-inverse），N = I − J<sup>+</sup>J 是零空间投影矩阵。J 是 6×29 的长方阵，没有普通逆；伪逆是「让 J<span class="qddot">q</span> 尽量接近目标、同时让 <span class="qddot">q</span> 的范数最小」的那个矩阵，长方阵下它一定存在。N 的作用也一句话能说清：把任意向量里「J 能看见的分量」减掉，剩下的就是不影响任务的方向。所以第一项让任务加速度精确等于 a<sup>*</sup>，第二项把任意加速度 <span class="qddot">q</span><sub>0</sub> 投影到零空间里，两项叠加，任务误差不变。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch05-fig4-title ch05-fig4-desc">
+        <title id="ch05-fig4-title">任务方向与零空间的二维几何</title>
+        <desc id="ch05-fig4-desc">向量 j 表示质心任务方向，n 是与之垂直的零空间方向。姿态任务想要的加速度 q0 被分解为沿 j 的投影与被投影掉的零空间分量 N q0。</desc>
+
+        <defs>
+          <marker id="ch05-fig4-arrow-d1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d1)"/>
+          </marker>
+          <marker id="ch05-fig4-arrow-d4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d4)"/>
+          </marker>
+          <marker id="ch05-fig4-arrow-ink" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--ink-2)"/>
+          </marker>
+        </defs>
+
+        <line x1="163.7" y1="267.6" x2="81.6" y2="42" stroke="var(--d3)" stroke-width="1.2" stroke-dasharray="6 4"/>
+        <line x1="150" y1="230" x2="460" y2="117" stroke="var(--d1)" stroke-width="2.2" marker-end="url(#ch05-fig4-arrow-d1)"/>
+        <line x1="150" y1="230" x2="97.5" y2="86" stroke="var(--d4)" stroke-width="2" marker-end="url(#ch05-fig4-arrow-d4)"/>
+        <line x1="150" y1="230" x2="218.4" y2="42" stroke="var(--ink-2)" stroke-width="1.6" marker-end="url(#ch05-fig4-arrow-ink)"/>
+        <line x1="218.4" y1="42" x2="270.9" y2="186" stroke="var(--d2)" stroke-width="1.2" stroke-dasharray="5 4"/>
+
+        <path d="M161.3 225.9 L157.2 214.6 L145.9 218.7" fill="none" stroke="var(--ink-2)" stroke-width="1"/>
+
+        <circle cx="270.9" cy="186" r="3" style="fill:var(--d2)"/>
+
+        <text x="470" y="112" font-size="13" style="fill:var(--d1)">j：质心任务方向</text>
+        <text x="90" y="34" font-size="13" style="fill:var(--d3)">N：零空间（23 维）</text>
+        <text x="86" y="80" font-size="13" text-anchor="end" style="fill:var(--d4)">N <tspan class="t-mono">q</tspan>₀</text>
+        <text x="228" y="38" font-size="13" style="fill:var(--ink-2)">q₀：姿态任务想要的方向</text>
+        <text x="282" y="200" font-size="12" style="fill:var(--d2)">沿 j 的投影（被保留）</text>
+
+        <text x="300" y="290" font-size="12" text-anchor="middle" style="fill:var(--muted-ink)">29 维里 6 维让给质心位置与躯干姿态，剩下的 23 维才是摆腿与关节姿态的余地</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 5.4</span>二维示意下的零空间投影：任意期望加速度 q<sub>0</sub> 被拆成「沿任务方向」与「零空间」两部分。
+      <span class="fig-note read-for">读者应看出：低优先级任务不是被削弱，而是被投影到高层任务的零空间里，做完之后高层任务一点没变。</span>
+      <span class="fig-src">来源：作者绘制，维度按 n=23 的整机计算。</span>
+    </figcaption>
+  </figure>
+
+  <h3>软权重与严格分层</h3>
+
+  <p>另一种写法是加权和：<span class="formula-inline">min w<sub>1</sub>‖e<sub>1</sub>‖<sup>2</sup> + w<sub>2</sub>‖e<sub>2</sub>‖<sup>2</sup></span>。它便宜、光滑、永远有解，但冲突时按权重比例让步。举个具体例子：手要保 0.4 mm，权重给 1000；质心权重给 10。最优解会让质心误差是手误差的 100 倍——手差 0.4 mm，质心差 40 mm，机器人在 0.9 m 高度上倾 2.5°。这不是 bug，是权重写出来的价值观。</p>
+
+  <p>反过来，严格分层（hierarchical QP）让质心误差为 0，手差多少就是多少。同一台机器、同一组任务，两种写法给出两种性格：前者手稳但站不稳，后者站得稳但手会飘 8 mm。选择取决于你在卖什么——装配任务选手，行走任务选站。</p>
+
+  <h3>为什么必须是 QP</h3>
+
+  <p>三个理由，每个都能落到数字上。第一，伪逆只能处理等式。摩擦锥、力矩上限、关节限位全是不等式；把 H1 的 360 N·m 膝力矩上限硬塞进伪逆，只能事后截断，而截断后的 τ 不再满足动力学方程，机器人朝一个没人算过的方向加速。</p>
+
+  <p>第二，伪逆给最小范数解，不理解可行性。双支撑时它把力平均分给两只脚，各 294 N；需要 200 N 切向力时，μ=0.5 只允许 147 N，这个解不可行，而伪逆不会告诉你。</p>
+
+  <p>第三，奇异位形附近伪逆会把力矩放大几个数量级。QP 的 τ ≤ 360 N·m 会把它挡住，代价是任务误差；伪逆的代价是电机。</p>
+
+  <div class="formula-block">
+    <span class="formula">min<sub><span class="qddot">q</span>,τ,f</sub> Σ<sub>i</sub> w<sub>i</sub>‖J<sub>i</sub><span class="qddot">q</span> + <span class="qdot">J</span><sub>i</sub><span class="qdot">q</span> − a<sub>i</sub><sup>*</sup>‖<sup>2</sup> + ε‖τ‖<sup>2</sup> + δ‖f‖<sup>2</sup></span>
+    <span class="formula-no">5.5</span>
+  </div>
+
+  <div class="formula-block">
+    <span class="formula">s.t.&nbsp; M<span class="qddot">q</span> + h = S<sup>⊤</sup>τ + Σ<sub>i</sub>J<sub>i</sub><sup>⊤</sup>f<sub>i</sub>,&nbsp; f<sub>z</sub> ≥ 20 N,&nbsp; |f<sub>t</sub>| ≤ μ f<sub>z</sub>,&nbsp; τ<sub>min</sub> ≤ τ ≤ τ<sub>max</sub>,&nbsp; <span class="qddot">q</span><sub>min</sub> ≤ <span class="qddot">q</span> ≤ <span class="qddot">q</span><sub>max</sub></span>
+    <span class="formula-no">5.6</span>
+  </div>
+
+  <p>把这几行拆开看，每一项都有物理意义：目标函数的第一项是任务跟踪，权重 w<sub>i</sub> 决定「哪个任务更贵」；后两项是正则，防止解在零空间里乱跑。约束里第一条是动力学，第二条是单边与摩擦，第三、四条是硬件能力。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 5.1 一个 WBC 的 QP 里都有什么</caption>
+      <thead>
+        <tr><th>类别</th><th>数学形式</th><th>物理含义</th><th>违反后的现象</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>决策变量</td><td class="num"><span class="qddot">q</span> 29 + τ 23 + f 12</td><td>加速度、力矩、接触力</td><td>—</td></tr>
+        <tr><td>动力学</td><td>M<span class="qddot">q</span> + h = S<sup>⊤</sup>τ + ΣJ<sub>i</sub><sup>⊤</sup>f<sub>i</sub></td><td>牛顿—欧拉定律，29 个等式</td><td>算出物理上不可能的运动</td></tr>
+        <tr><td>单边</td><td>f<sub>z</sub> ≥ 20 N</td><td>地面只能推，不能拉</td><td>脚「吸」在地上，抬不起来</td></tr>
+        <tr><td>摩擦锥</td><td>|f<sub>t</sub>| ≤ μ f<sub>z</sub></td><td>切向力的上限</td><td>打滑，跟踪瞬间崩掉</td></tr>
+        <tr><td>力矩上限</td><td>τ<sub>min</sub> ≤ τ ≤ τ<sub>max</sub></td><td>电机与减速器的能力</td><td>限幅、饱和、过热</td></tr>
+        <tr><td>关节加速度</td><td>|<span class="qddot">q</span>| ≤ 40 rad/s²</td><td>保护减速器与连杆</td><td>冲击载荷，寿命骤降</td></tr>
+        <tr><td>任务（软）</td><td>J<span class="qddot">q</span> + <span class="qdot">J</span><span class="qdot">q</span> = a<sup>*</sup></td><td>质心、姿态、手、脚的目标</td><td>误差变大，但不致命</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>代价是算力。Herzog 等 2014 在液压人形上做的分层 QP 给出了可对照的数：14 自由度双支撑平衡任务，单次求解最大 0.4 ms，1 ms 周期里余量 0.6 ms；同一套代码做 25 自由度迈步，最大 3 ms（用他们提出的分解技巧）或 5 ms（不用），是预算的 3–5 倍。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch05-fig5-title ch05-fig5-desc">
+        <title id="ch05-fig5-title">分层 QP 的单次求解时间与 1 kHz 预算</title>
+        <desc id="ch05-fig5-desc">横轴为单次求解时间 0 到 5 毫秒。14 自由度双支撑为 0.4 毫秒，25 自由度迈步分解后 3.0 毫秒、未分解 5.0 毫秒。1 毫秒处有一条预算虚线。</desc>
+
+        <g font-size="12" style="fill:var(--ink-2)">
+          <rect x="400" y="26" width="10" height="10" style="fill:var(--d1)"/>
+          <text x="416" y="36">预算内</text>
+          <rect x="468" y="26" width="10" height="10" style="fill:var(--d2)"/>
+          <text x="484" y="36">超预算</text>
+        </g>
+
+        <line x1="220.9" y1="48" x2="220.9" y2="252" stroke="var(--signal)" stroke-width="1.5" stroke-dasharray="5 4"/>
+        <text x="228" y="60" font-size="12" style="fill:var(--signal-ink)">1 kHz 预算 · 1 ms</text>
+
+        <g font-size="12" style="fill:var(--ink-2)" text-anchor="end">
+          <text x="140" y="86">14 DoF 双支撑</text>
+          <text x="140" y="156">25 DoF 迈步 · 分解后</text>
+          <text x="140" y="226">25 DoF 迈步 · 未分解</text>
+        </g>
+
+        <rect x="150" y="66" width="28.4" height="28" style="fill:var(--d1)"/>
+        <rect x="150" y="136" width="212.7" height="28" style="fill:var(--d2)"/>
+        <rect x="150" y="206" width="354.5" height="28" style="fill:var(--d2)"/>
+
+        <text x="150" y="58" font-size="12" class="t-mono" style="fill:var(--ink)">0.4 ms</text>
+        <text x="354" y="156" font-size="12" class="t-mono" text-anchor="end" style="fill:var(--paper)">3.0 ms</text>
+        <text x="496" y="226" font-size="12" class="t-mono" text-anchor="end" style="fill:var(--paper)">5.0 ms</text>
+
+        <line x1="150" y1="252" x2="540" y2="252" stroke="var(--line-2)" stroke-width="1"/>
+        <g class="t-mono" font-size="12" style="fill:var(--muted-ink)" text-anchor="middle">
+          <text x="150" y="270">0</text>
+          <text x="220.9" y="270">1</text>
+          <text x="291.8" y="270">2</text>
+          <text x="362.7" y="270">3</text>
+          <text x="433.6" y="270">4</text>
+          <text x="504.5" y="270">5</text>
+        </g>
+        <text x="540" y="292" font-size="12" text-anchor="end" style="fill:var(--ink-2)">单次求解时间 / ms</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 5.5</span>分层 QP 的单次求解时间：14 自由度双支撑 0.4 ms，25 自由度迈步 3.0 / 5.0 ms（分解前/后）。
+      <span class="fig-note read-for">读者应看出：平衡任务在 1 kHz 里有 0.6 ms 余量，而带迈步的全身问题已经超预算 3–5 倍——频率不是想提就能提。</span>
+      <span class="fig-src">来源：Herzog 等，2014，Table II 与 Fig. 3（Sarcos 液压人形，单核 i7-2600）。</span>
+    </figcaption>
+  </figure>
+
+  <p>结论很直接：14 DoF 的平衡可以 1 kHz；25 DoF 的全身迈步要么降到 300 Hz，要么把问题分解、热启动，或者把一部分任务挪到 100 Hz 的规划层。这就是真机上常见的「MPC 50–100 Hz + WBC 500 Hz–1 kHz」分层的由来，而不是所有东西都越快越好。</p>
+
+  <h2>任务空间控制：三种把误差变成力矩的方法</h2>
+
+  <p>这一节解决的问题：QP 解出的是加速度与力矩，但关节层真正跑的是一个位置环或力矩环；三种控制律把误差变成力矩的方式不同，刚度选错，前面所有优化都白算。任务空间（task space）指末端或质心的笛卡尔空间，误差在这里度量最直接。</p>
+
+  <p>最简单的写法不需要动力学模型：把任务空间的误差看成弹簧阻尼，再用雅可比转置变回关节力矩。</p>
+
+  <div class="formula-block">
+    <span class="formula">τ<span class="op">=</span>J<sup>⊤</sup>(K<sub>p</sub>e<span class="op">+</span>K<sub>d</sub><span class="qdot">e</span>)<span class="op">+</span>g(q)</span>
+    <span class="formula-no">5.7</span>
+  </div>
+
+  <p>这就是第 2 章的 τ = J<sup>⊤</sup>F，只是把 F 写成弹簧。K<sub>p</sub> 的单位是 N/m（笛卡尔）或 N·m/rad（关节），K<sub>d</sub> 是 N·s/m 或 N·m·s/rad。它只需要重力项 g(q)，不需要 M，因此在嵌入式上很便宜，也很鲁棒——代价是刚度一高就容易在延迟下振荡。</p>
+
+  <p>第二种用模型把非线性消掉：</p>
+
+  <div class="formula-block">
+    <span class="formula">τ<span class="op">=</span>M(q)(<span class="qddot">q</span><sub>d</sub><span class="op">+</span>K<sub>d</sub><span class="qdot">e</span><span class="op">+</span>K<sub>p</sub>e)<span class="op">+</span>h(q, <span class="qdot">q</span>)</span>
+    <span class="formula-no">5.8</span>
+  </div>
+
+  <p>这叫计算力矩控制（computed torque）。理想情况下误差满足 ë + K<sub>d</sub>ė + K<sub>p</sub>e = 0，是一个可以任意配置极点的二阶系统。代价是模型：M 错 20%，闭环极点就跟着偏。实际误差主要来自两处——手里多 5 kg 的负载，以及连杆惯量（CAD 与实测差 10–20%）。</p>
+
+  <h3>三个刚度锚点</h3>
+
+  <p>站立腿 K = 20 kN/m。60 kg 压上去，静态下垂 589/20000 = 29 mm，本征频率 √(K/m) = 2.9 Hz，决定了被推一下之后晃多久。这个数不是随便取的：K 太小，机器人像踩在弹簧上；K 太大，落地冲击直接传进减速器。</p>
+
+  <p>手臂 K = 500 N/m。抓 1 kg 物体下垂 9.8/500 = 20 mm。这就是为什么抓取要用导纳或力控：纯位置环抓鸡蛋会碎，而把 K 降到 100 N/m 又拿不稳。</p>
+
+  <p>关节空间 K<sub>p</sub> = 200 N·m/rad。膝关节上有 88 N·m 的重力矩（60 kg 单腿、杠杆臂 0.15 m），位置误差 88/200 = 0.44 rad = 25°。所以「PD 站不住」通常不是增益不够，是没做重力补偿；把 g(q) 加上，模型准到 4% 时同样的 K<sub>p</sub> 能把误差压到 1° 以内。</p>
+
+  <p>阻抗控制（impedance control）与导纳控制（admittance control）是同一件事的两面。阻抗是「测位置误差、输出力」，需要力矩可控的关节（准直驱）；导纳是「测外力、改位置指令」，需要力传感器与位置伺服。前者在碰撞瞬间是软的，后者是硬的再退让——抓取用导纳，腿用阻抗。</p>
+
+  <aside class="callout callout--intuition" data-reveal>
+    <p class="callout-kicker">直觉 <span>Intuition</span></p>
+    <p>刚度不是越高越好。把 K 提高 10 倍，本征频率只提高 √10 = 3.2 倍；但同样的 2 ms 延迟，相位滞后一点没少。K = 200 kN/m 时 60 kg 的本征频率是 9.2 Hz，看起来很低；可足底橡胶的接触模态在 50 Hz，环路上任何 2 ms 的延迟都会在那附近把相位裕度吃光。加刚度靠电机，加带宽靠实时性，两件事不能互相替代。</p>
+  </aside>
+
+  <h2>接触力分配：多出来的 6 维自由度</h2>
+
+  <p>这一节解决的问题：双支撑时 12 个接触力分量只受 6 个方程约束，剩下 6 维怎么用，决定了电机发不发热、脚滑不滑。</p>
+
+  <p>质心动力学只有 6 个方程（3 力加 3 矩），双支撑有 12 个未知力分量。欠定，解不唯一。最省事的解法是伪逆：</p>
+
+  <div class="formula-block">
+    <span class="formula">f = A<sup>⊤</sup>(AA<sup>⊤</sup>)<sup>−1</sup>b</span>
+    <span class="formula-no">5.9</span>
+  </div>
+
+  <p>它给最小范数解，也就是「总推力最小」的分配。这个解有三个问题。</p>
+
+  <p>它可能给出负的法向力。地面不能拉住脚，但最小范数解不知道这条约束，数学上完全允许 f<sub>z</sub> = −50 N。</p>
+
+  <p>它在两脚之间制造内力。机器人要产生 100 N·m 的偏航力矩时，伪逆会让左脚向前推、右脚向后推，形成一对力偶；地面被磨、电机发热，机器人原地不动。这对力偶的大小由解的范数决定，不是物理需要。</p>
+
+  <p>它写不进法向力的上下界。f<sub>z</sub> ≥ 20 N 保证接触，f<sub>z</sub> ≤ 800 N 防止压坏足底橡胶——两条都是线性不等式，伪逆无从表达。</p>
+
+  <p>QP 版本把这三件事一次解决：</p>
+
+  <div class="formula-block">
+    <span class="formula">min<sub>f</sub> f<sup>⊤</sup>Wf&nbsp;&nbsp; s.t.&nbsp; A f = b,&nbsp; f<sub>z</sub> ≥ f<sub>min</sub>,&nbsp; |f<sub>t</sub>| ≤ μ f<sub>z</sub></span>
+    <span class="formula-no">5.10</span>
+  </div>
+
+  <p>W 对切向分量加大权重，就是在惩罚内力。一个数字：μ=0.5、单脚 f<sub>z</sub>=294 N 时，最大切向力 147 N。要 200 N 的切向力，必须把这只脚的法向力提到 400 N 以上——「踩得更实才能推得更狠」。这也是快速变向时机器人会先蹲一下的原因：蹲下降低质心，同样 0.06 m 的 CoP 偏移能撑住更大的加速度（a<sub>x</sub> = g·Δ/z<sub>c</sub>，z<sub>c</sub> 从 0.9 m 降到 0.7 m 就多 29%），同时给膝关节留出力矩余量。</p>
+
+  <h2>为什么是 500 Hz 到 1 kHz</h2>
+
+  <p>这一节解决的问题：控制频率不是「越快越好」的口号，它被两个物理量夹住——环路延迟与接触刚度。</p>
+
+  <p>延迟的代价是相位，φ = 360° × f × T<sub>d</sub>。T<sub>d</sub> 包括采样（0–1 ms）、计算（0.4 ms）、总线（0.1–0.3 ms）、执行器响应（0.2 ms）。1 kHz 时 T<sub>d</sub> 约 1.5–2 ms，50 Hz 处 φ = 27–36°，100 Hz 处 54–72°。</p>
+
+  <p>相位裕度 45° 是常用经验线，对应 f = 45 / (360 × 0.002) = 62.5 Hz。也就是说：1 kHz 采样加 2 ms 延迟，闭环带宽上限约 60 Hz。这不是保守，是线性系统的算术。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 340" role="img" aria-labelledby="ch05-fig6-title ch05-fig6-desc">
+        <title id="ch05-fig6-title">不同环路延迟下的相位滞后与频率</title>
+        <desc id="ch05-fig6-desc">横轴为频率 0 到 200 赫兹，纵轴为相位滞后 0 到 180 度。0.5、1、2、4 毫秒四条延迟曲线均从原点线性上升，45 度参考线与它们分别在 250、125、62.5、31 赫兹处相交。</desc>
+
+        <g stroke="var(--line)" stroke-width=".5" stroke-dasharray="2 4">
+          <line x1="96" y1="221.5" x2="556" y2="221.5"/>
+          <line x1="96" y1="161" x2="556" y2="161"/>
+          <line x1="96" y1="100.5" x2="556" y2="100.5"/>
+          <line x1="96" y1="40" x2="556" y2="40"/>
+        </g>
+
+        <line x1="96" y1="282" x2="556" y2="282" stroke="var(--line-2)" stroke-width="1"/>
+        <line x1="96" y1="282" x2="96" y2="40" stroke="var(--line-2)" stroke-width="1"/>
+
+        <line x1="96" y1="221.5" x2="556" y2="221.5" stroke="var(--d4)" stroke-width="1.2" stroke-dasharray="6 4"/>
+
+        <line x1="96" y1="282" x2="556" y2="233.6" stroke="var(--d1)" stroke-width="1.5"/>
+        <line x1="96" y1="282" x2="556" y2="185.2" stroke="var(--d2)" stroke-width="1.5"/>
+        <line x1="96" y1="282" x2="556" y2="88.4" stroke="var(--d3)" stroke-width="1.5"/>
+        <line x1="96" y1="282" x2="383.5" y2="40" stroke="var(--d5)" stroke-width="1.5"/>
+
+        <circle cx="383.5" cy="221.5" r="3.5" style="fill:var(--d2)"/>
+        <circle cx="239.75" cy="221.5" r="3.5" style="fill:var(--d3)"/>
+        <circle cx="167.9" cy="221.5" r="3.5" style="fill:var(--d5)"/>
+
+        <g class="t-mono" font-size="12" style="fill:var(--muted-ink)">
+          <text x="96" y="300" text-anchor="middle">0</text>
+          <text x="211" y="300" text-anchor="middle">50</text>
+          <text x="326" y="300" text-anchor="middle">100</text>
+          <text x="441" y="300" text-anchor="middle">150</text>
+          <text x="556" y="300" text-anchor="middle">200</text>
+          <text x="86" y="286" text-anchor="end">0</text>
+          <text x="86" y="225.5" text-anchor="end">45</text>
+          <text x="86" y="165" text-anchor="end">90</text>
+          <text x="86" y="104.5" text-anchor="end">135</text>
+          <text x="86" y="44" text-anchor="end">180</text>
+        </g>
+
+        <text x="556" y="322" font-size="12" text-anchor="end" style="fill:var(--ink-2)">频率 / Hz</text>
+        <text x="46" y="161" font-size="12" text-anchor="middle" transform="rotate(-90 46 161)" style="fill:var(--ink-2)">相位滞后 / °</text>
+
+        <text x="104" y="214" font-size="12" style="fill:var(--ink-2)">45° 裕度线</text>
+
+        <g font-size="12" style="fill:var(--ink-2)">
+          <line x1="110" y1="56" x2="134" y2="56" stroke="var(--d1)" stroke-width="1.5"/>
+          <text x="140" y="60">0.5 ms · 250 Hz</text>
+          <line x1="110" y1="76" x2="134" y2="76" stroke="var(--d2)" stroke-width="1.5"/>
+          <text x="140" y="80">1 ms · 125 Hz</text>
+          <line x1="110" y1="96" x2="134" y2="96" stroke="var(--d3)" stroke-width="1.5"/>
+          <text x="140" y="100">2 ms · 62 Hz</text>
+          <line x1="110" y1="116" x2="134" y2="116" stroke="var(--d5)" stroke-width="1.5"/>
+          <text x="140" y="120">4 ms · 31 Hz</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 5.6</span>相位滞后随频率线性增长，四条曲线对应 0.5–4 ms 的环路延迟。45° 是常用的稳定裕度参考线。
+      <span class="fig-note read-for">读者应看出：想把闭环带宽做到 100 Hz，延迟必须压到 1 ms 以内；1 kHz 采样加 2 ms 延迟，上限只有 62 Hz。</span>
+      <span class="fig-src">来源：作者按 φ = 360°·f·T<sub>d</sub> 绘制，纯延迟模型。</span>
+    </figcaption>
+  </figure>
+
+  <p>接触刚度给出另一个下界。橡胶足底的法向刚度约 1×10⁵ N/m，参与振动的等效质量约 1 kg（脚加一部分小腿），接触模态 √(k/m) = 316 rad/s ≈ 50 Hz。要让这个模态听你的话，环路带宽至少是它的 2–3 倍，即 100–150 Hz；反过来要求 T<sub>d</sub> ≤ 45 / (360 × 150) = 0.83 ms，再留一半给计算与通信，采样周期就得压到 0.5 ms 以下——这就是 2 kHz 的来历。</p>
+
+  <p>实际系统取 1 kHz，是因为 50 Hz 的接触模态只在落地那 10 ms 被强烈激发；稳态行走时，把落地交给柔顺（低刚度）处理，比把整个环路提到 2 kHz 便宜得多。</p>
+
+  <p>还有一个下界来自力矩环。准直驱关节的力矩带宽 100–300 Hz，WBC 的输出必须落在这个带宽内；如果 WBC 只跑 100 Hz，力矩指令本身就是 100 Hz 的阶梯，再经过执行器的一阶保持，相位又掉 30°。</p>
+
+  <p>500 Hz 够不够？慢走够：步频 1–2 Hz，接触模态只在落地瞬间。跑跳不够：腾空 100–200 ms，落地冲击 3–5 倍体重。这也解释了为什么四足跑跳的 WBC 普遍 1 kHz，而协作臂的阻抗环可以 1–2 kHz 但只控制 6 个关节——关节数少，矩阵小，算得起。</p>
+
+  <h2>三套真实系统怎么分工</h2>
+
+  <p>这一节解决的问题：同样的方程，Atlas、IHMC 与 Unitree 在三层上的切法不同；看懂切法，就知道它们的失效模式。</p>
+
+  <p>Atlas 的公开描述（Kuindersma 等 2016）是一条三层流水线：混合整数凸优化选落脚点，秒级重规划；质心与动量 MPC 算接触力，几十 Hz；全身逆动力学 QP 算关节力矩，数百 Hz 到 1 kHz。DRC 版 Atlas 是 28 个液压关节。这套栈的代价是模型与标定：液压摩擦、软管刚度、关节间隙都不在 CAD 模型里，WBC 只能用较大的力矩增益去压误差，而大增益又把接触冲击放大。</p>
+
+  <p>IHMC 把整套 WBC 开源在 <a href="https://github.com/ihmcrobotics/ihmc-open-robotics-software">ihmc-open-robotics-software</a> 里，核心是把动量、角动量、接触约束写进同一个 QP，控制周期在公开代码里取 1 ms。它的工程价值在「可读」：优先级怎么排、接触点怎么加、QP 不可行时怎么退化，代码里都有答案。DRC 版 Atlas 与 Valkyrie 用过这套控制器。</p>
+
+  <p>Unitree 走商品化路线：G1 35 kg、膝 90 N·m，H1 47 kg、膝 360 N·m。硬件力矩密度够用之后，上层换成强化学习策略（30–50 Hz）或 MPC，中层 WBC 与 PD，关节 1 kHz。G1 的 2.6 N·m/kg 只覆盖静态与慢走，抗扰主要靠「少犯错」——策略学出来的步态比 WBC 大力纠正更省力矩。这是第 7 章的主题。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 5.2 三套系统的分层切法</caption>
+      <thead>
+        <tr><th>系统</th><th>上层 · 落脚与轨迹</th><th>中层 · 接触力</th><th>关节层</th><th>误差谁兜底</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Atlas（DRC）</td><td>混合整数凸优化，秒级</td><td>质心/动量 MPC，几十 Hz</td><td>全身 QP，数百 Hz–1 kHz</td><td>优化 + 高增益</td></tr>
+        <tr><td>IHMC WBC</td><td>外部给定接触序列</td><td>动量任务进同一个 QP</td><td>1 kHz</td><td>严格优先级与约束</td></tr>
+        <tr><td>Unitree G1 / H1</td><td>RL 策略 30–50 Hz 或 MPC</td><td>策略隐式，或 WBC</td><td>1 kHz PD</td><td>数据与域随机化</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>一句判断：三者的 WBC 方程几乎一样，差别在「谁决定接触序列」和「模型误差谁兜底」——Atlas 用优化兜底，IHMC 用约束与优先级兜底，Unitree 用数据兜底。</p>
+
+  <h2>一段 QP：把物理写进矩阵</h2>
+
+  <p>这一节解决的问题：把前面所有约束落成三十行代码，知道每个矩阵块对应哪个物理量。</p>
+
+  <p>下面是伪代码，用 OSQP 的接口（ADMM 型求解器，支持热启动）。省略了三件事：M、h、J 的装配（真实系统里用 Pinocchio 的 CRBA 与 RNEA 各算一次）、任务参考加速度 a<sup>*</sup>（由 PD 律从误差算出）、以及接触序列（由上层给）。</p>
+
+  <pre data-lang="python"><code><span class="tok-c"># 伪代码：M(q)、h(q, qdot)、J 由 Pinocchio 的 crba/rnea 各算一次，这里当已知</span>
+<span class="tok-k">import</span> numpy <span class="tok-k">as</span> np, osqp
+n, c = <span class="tok-n">23</span>, <span class="tok-n">2</span>            <span class="tok-c"># 23 个关节，2 个接触点（双脚）</span>
+nx = (n + <span class="tok-n">6</span>) + n + <span class="tok-n">6</span> * c  <span class="tok-c"># qdd 29 + tau 23 + f 12 = 64 个决策变量</span>
+
+<span class="tok-c"># 目标 ½xᵀPx + cᵀx：任务跟踪 Σ‖Jᵢ·qdd + J̇ᵢ·qdot − aᵢ*‖² + 力矩与接触力正则</span>
+P = np.zeros((nx, nx))
+c_vec = np.zeros(nx)
+tasks = [(J_com, dJ_com, a_com, <span class="tok-n">1e3</span>),      <span class="tok-c"># 质心 3 维</span>
+         (J_torso, dJ_torso, a_torso, <span class="tok-n">1e2</span>),  <span class="tok-c"># 躯干姿态 3 维</span>
+         (J_hand, dJ_hand, a_hand, <span class="tok-n">1e1</span>)]    <span class="tok-c"># 手 6 维</span>
+<span class="tok-k">for</span> J_i, dJ_i, a_i, w_i <span class="tok-k">in</span> tasks:
+    Jq = J_i[:, :n + <span class="tok-n">6</span>]              <span class="tok-c"># 任务雅可比只作用在 qdd 的 29 个分量上</span>
+    P[:n + <span class="tok-n">6</span>, :n + <span class="tok-n">6</span>] += w_i * Jq.T @ Jq          <span class="tok-c"># P 的任务块 = Σ JᵀWJ</span>
+    c_vec[:n + <span class="tok-n">6</span>] -= w_i * Jq.T @ (a_i - dJ_i @ qdot)  <span class="tok-c"># −Σ JᵀW(a* − J̇q̇)</span>
+P[n + <span class="tok-n">6</span>:n + <span class="tok-n">6</span> + n, n + <span class="tok-n">6</span>:n + <span class="tok-n">6</span> + n] = eps * np.eye(n)   <span class="tok-c"># 力矩正则 εI</span>
+P[n + <span class="tok-n">6</span> + n:, n + <span class="tok-n">6</span> + n:] = delta * W_f             <span class="tok-c"># 接触力正则 δW</span>
+
+<span class="tok-c"># 等式约束：M·qdd + h = Sᵀ·tau + Σ Jᵢᵀ·fᵢ</span>
+A_dyn = np.hstack([M, -S.T, -J.T])  <span class="tok-c"># 29×64；前 6 行 -Sᵀ 块全 0</span>
+l_dyn = u_dyn = -h
+
+<span class="tok-c"># 不等式：摩擦锥 8 边、单边 fz ≥ 20 N、力矩上限、关节加速度上限</span>
+A = np.vstack([A_dyn, A_fric, A_tau, A_acc])
+l = np.concatenate([l_dyn, -np.inf * np.ones(<span class="tok-n">8</span> * c), tau_min, -acc_max])
+u = np.concatenate([u_dyn, np.zeros(<span class="tok-n">8</span> * c), tau_max, acc_max])
+
+solver = osqp.OSQP()
+solver.setup(P=P, q=c_vec, A=A, l=l, u=u,
+             warm_start=<span class="tok-k">True</span>, verbose=<span class="tok-k">False</span>)
+tau = solver.solve().x[-n:]      <span class="tok-c"># 最后 23 个数就是关节力矩</span></code></pre>
+
+  <p>决策变量 64 个：29 个 <span class="qddot">q</span>、23 个 τ、12 个 f。P 的第一块不是把任务权重直接加在 <span class="qddot">q</span> 上，而是 Σ J<sub>i</sub><sup>⊤</sup>W<sub>i</sub>J<sub>i</sub>——任务雅可比把任务空间的误差折回关节加速度，线性项同时扣掉 J̇<span class="qdot">q</span> 这一项速度耦合。后两块是 εI 与 δW，它们不是可有可无的数值稳定项：64 − 29 = 35 维零空间里，正好有 6 维是双脚内力（12 个接触力分量只被 6 个质心方程定住），正则正是在这 35 维里挑出唯一解。不加，QP 有无穷多组等价解，接触力会在两脚之间随机跳，电机跟着发热。</p>
+
+  <p>最值得看的是 A_dyn 的形状：M 是 29×29，−S<sup>⊤</sup> 是 29×23，−J<sup>⊤</sup> 是 29×12，拼起来 29×64。前 6 行里 −S<sup>⊤</sup> 那一段全是 0——这就是浮基，在代码里只有一行，在物理上决定了整机的可控性。</p>
+
+  <p>三件事在伪代码里看不到，但在真机上决定成败。热启动：把上一周期的解作为初值，OSQP 的迭代次数能从约 100 次降到约 10 次。不可行检测：摩擦锥与力矩上限同时绷紧时 QP 会不可行，工程上给摩擦锥加松弛变量并罚它，返回「最接近可行」的解。时间预算：14 DoF 的 0.4 ms 有余量，25 DoF 迈步的 3 ms 没有——后者必须降频或分层。</p>
+
+  <p>真机上要落地，还得先解决 M、h、J 的来源：<a href="https://github.com/stack-of-tasks/pinocchio">Pinocchio</a> 提供 RNEA、CRBA 与解析导数，<a href="https://github.com/stack-of-tasks/tsid">TSID</a> 是任务空间逆动力学的参考实现。先用它们把手算的 <span class="formula-inline">τ = J<sup>⊤</sup>F</span> 对上，再谈调参。</p>
+
+  <section class="takeaways" data-takeaways aria-labelledby="ch05-takeaways">
+    <p class="kicker" id="ch05-takeaways">本章要点 <span>Takeaways</span></p>
+    <ol>
+      <li><strong>前 6 行没有 τ。</strong>欠驱动不是修辞，是矩阵里的一片 0：基座只能被接触力推动，腾空后连质心轨迹都改不了。</li>
+      <li><strong>单刚体模型够规划，不够控制。</strong>腿的摆动角动量在 1 Hz 步频下占 5–10%，3 Hz 时到 20–30%——这就是 MPC 用 6 维、WBC 用 29 维的分界。</li>
+      <li><strong>摩擦与翻倒是两个上限。</strong>μ=0.13 是分界：木地板上先限制你的是 CoP（1.31 m/s²），冰面上才是摩擦（0.98 m/s²）。</li>
+      <li><strong>1 kHz 由两个数字夹出来。</strong>2 ms 延迟在 45° 裕度下锁住 62 Hz 带宽，而足底接触模态在 50 Hz；两个数字一夹，周期只能是毫秒级。</li>
+    </ol>
+  </section>
+
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[01]</span>
+      <div>
+        <p class="paper-title">Balancing experiments on a torque-controlled humanoid with hierarchical inverse dynamics</p>
+        <p class="paper-meta">Herzog, Righetti, Grimminger, Pastor, Schaal · IROS, 2014 · 首次在真机上把分层 QP 跑进 1 kHz 力矩环，给出 14 / 25 DoF 的求解时间</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1305.2042">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[02]</span>
+      <div>
+        <p class="paper-title">Momentum Control with Hierarchical Inverse Dynamics on a Torque-Controlled Humanoid</p>
+        <p class="paper-meta">Herzog 等 · Autonomous Robots, 2016 · 把动量与角动量任务纳入层级 WBC，讨论优先级怎么排</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1410.7284">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[03]</span>
+      <div>
+        <p class="paper-title">Optimization-based locomotion planning, estimation, and control design for the Atlas humanoid robot</p>
+        <p class="paper-meta">Kuindersma 等 · Autonomous Robots 40(3), 2016 · Atlas 的分层栈：落脚点规划、MPC、WBC、估计如何接起来</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1007/s10514-015-9479-3">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[04]</span>
+      <div>
+        <p class="paper-title">Inertial Properties in Robotic Manipulation: An Object-Level Framework</p>
+        <p class="paper-meta">Khatib · Int. J. Robotics Research, 1995 · 操作空间与零空间的来源，解释末端惯量如何决定力控品质</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1177/027836499501400103">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[05]</span>
+      <div>
+        <p class="paper-title">OSQP: an operator splitting solver for quadratic programs</p>
+        <p class="paper-meta">Stellato 等 · 2020 · ADMM 型 QP，支持热启动与嵌入式代码生成，WBC 常用求解器之一</p>
+      </div>
+      <a class="paper-link" href="https://github.com/osqp/osqp">GitHub ↗</a>
+    </li>
+  </ol>
+
+  <a class="next-chapter" href="#ch-06">
+    <span class="next-kicker">下一章 · Next</span>
+    <span class="next-title">06｜步态与 MPC：从 ZMP 到预测控制</span>
+    <span class="next-arrow" aria-hidden="true">→</span>
+  </a>
+
+  <style>
+    /* 公式点号：点是绑定字母的伪元素，但必须以基线为参照——全局规则以行高盒子定位，会飘到上一行 */
+    #ch-05 .qdot, #ch-05 .qddot { line-height: 1; vertical-align: baseline; }
+    #ch-05 .qdot::after, #ch-05 .qddot::after, #ch-05 .qddot::before { top: auto; bottom: .78em; }
+    /* 长节标题断行平衡：「任务空间控制」这类标题不再把「的方法」三个字留成孤儿行 */
+    #ch-05 > h2 { text-wrap: balance; }
+    #ch-05 .demo-stage canvas { display: block; width: 100%; height: 240px; }
+    #ch-05 .demo-ctl { display: flex; flex: 1 1 300px; align-items: center; gap: 8px; min-width: 0; }
+    #ch-05 .demo-ctl label { flex: 0 0 auto; }
+    #ch-05 .demo-ctl input[type="range"] { flex: 1 1 60px; min-width: 60px; }
+    #ch-05 .demo-status { margin: 0; padding: 10px 16px 12px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; line-height: 1.7; letter-spacing: .02em; color: var(--muted-ink); }
+    #ch-05 .demo-status.is-slip { color: var(--signal-ink); }
+    #ch-05 .demo-readout dt .greek { text-transform: none; }
+    @media (max-width: 767px) {
+      #ch-05 .demo-stage canvas { height: 210px; }
+      #ch-05 .demo-ctl { flex-basis: 100%; }
+    }
+    @media (max-width: 560px) {
+      #ch-05 .demo-readout { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #ch-05 .demo-readout > div:nth-child(3) { border-left: 0; }
+    }
+  </style>
+</section>

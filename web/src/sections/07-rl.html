@@ -1,0 +1,944 @@
+<section class="chapter" id="ch-07" data-chapter="07">
+  <header class="chapter-head">
+    <div class="ch-meta">
+      <span class="ch-num" aria-hidden="true">07</span>
+      <p class="kicker">Reinforcement Learning &amp; Sim2Real</p>
+    </div>
+    <h2>强化学习与 Sim2Real：在仿真里摔一百万次</h2>
+    <p class="lede">第 6 章的 MPC 每一步都在解「如果世界如我所想」：摩擦是常数、负载已知、延迟为零。真机三条都不成立。这一章把控制改写成「观测 → 动作 → 奖励」，让几千台并行仿真的机器人一下午摔掉一亿五千万个样本，再把策略按到一台真机上。读完你能判断一段 RL demo 的奖励是否可部署、观测里哪一维真机拿不到、域随机化该开多宽。</p>
+  </header>
+
+  <p>一台 35 kg 的 G1 站在木地板上。脚底橡胶的摩擦系数是 0.7 还是 0.35，取决于上一小时有没有人拖过地；膝关节的力矩常数随线圈温度漂 5%；从 IMU 采样到力矩下发，中间有 20 ms 消不掉的延迟。第 6 章把这些量当成常数写进约束，于是每一步都在解一个「如果世界如我所想」的问题。世界不如你所想时，方程不会告诉你它错了——它会给一个自信的错误答案。</p>
+
+  <p>强化学习（Reinforcement Learning, RL）换了一个问法。它不问「给定模型，最优控制是什么」，而问「给定奖励，哪种行为得分最高」。前者要你把物理写对，后者要你把目标写对。这个交换不便宜：一个能走的人形策略通常要 1.5×10⁸ 个仿真样本，训练中会经历至少一次回报崩塌，而且没有任何稳定性保证。但它买到的是 MPC 给不了的东西——对模型误差的容忍。把仿真里学到的策略搬到真机上，这件事叫实机迁移（sim-to-real transfer，简称 sim2real），本章后半段的全部工程都在为它服务。</p>
+
+  <div class="stat-row" data-reveal>
+    <div class="stat"><span class="stat-value">4096<small>环境</small></span><span class="stat-label">单卡并行</span></div>
+    <div class="stat"><span class="stat-value">1.5<small>亿样本</small></span><span class="stat-label">一个行走策略</span></div>
+    <div class="stat"><span class="stat-value">20<small>min</small></span><span class="stat-label">ANYmal 崎岖地形</span></div>
+    <div class="stat"><span class="stat-value">47<small>维</small></span><span class="stat-label">G1 的观测</span></div>
+  </div>
+
+  <h2>为什么用 RL：模型写不出的三件事</h2>
+
+  <p>这一节解决的问题：判断什么时候 RL 值得用，什么时候它只是更贵的调参。</p>
+
+  <p>RL 值钱的地方不是「不需要模型」，而是「不需要精确模型」。三件事让精确模型变得不现实。</p>
+
+  <p>第一是接触。MuJoCo 与 Isaac 的接触都是软接触近似，靠 5–8 个参数（刚度、阻尼、摩擦、松弛）描述；足底橡胶的法向刚度约 1×10⁵ N/m，落地冲击 2–4 倍体重，接触只持续 5–10 ms。参数差 20%，10 ms 内的冲量就差 20%，足以让全身控制（Whole-Body Control, WBC）算出的力矩差 10 N·m 以上——G1 的踝关节在 Isaac Lab 里的力矩限幅是 35 N·m，这一差就是四分之一。</p>
+
+  <p>第二是柔顺与磨损。谐波减速器的扭转刚度随负载非线性，背隙 0.5–2 arcmin；脚底橡胶磨掉 2 mm，有效腿长就短 2 mm，步态相位跟着偏。这些量不在 URDF 里，也不在任何一款仿真器的默认参数里。</p>
+
+  <p>第三是延迟。从 IMU 采样到力矩下发，H1 的端到端实测约 20 ms（OmniH2O 报告，双 Orin NX 分工）。模型预测控制（Model Predictive Control, MPC）能补偿一部分，前提是知道延迟是多少、而且它不抖；这两条在 USB 摄像头、EtherCAT 与非实时 Linux 混跑的机器上都不成立。</p>
+
+  <p>换来的是另一种写任务的接口。同一台 G1，「以 1.2 m/s 前进、躯干倾角小于 5°、脚不打滑、膝关节不超过 90 N·m」写成奖励是几行代码；写成 MPC 需要接触序列、摩擦锥、参考轨迹与至少 12 个权重。奖励更接近人描述任务的方式，这是 RL 在腿足上真正赢过模型派的地方——不是算得更准，是目标写得动。</p>
+
+  <p>代价也要说清。样本：一个能走的人形策略约 1.5×10⁸ 个仿真样本。稳定性：近端策略优化（Proximal Policy Optimization, PPO）的回报曲线在 1500 次迭代里通常崩一次，靠回滚 checkpoint 或把学习率从 1×10⁻³ 降到 3×10⁻⁴ 救回来。可解释性：策略是一个 512-256-128 的多层感知机（Multilayer Perceptron, MLP），你没法问它为什么抬左脚。约束：策略不知道什么是硬约束，只知道扣分，力矩限幅仍要靠底层 PD 与驱动器。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 7.1 同一台 G1 上，MPC 与 PPO 策略的分工对照</caption>
+      <thead>
+        <tr><th>维度</th><th>MPC + WBC（第 5–6 章）</th><th>PPO 策略（本章）</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>决策频率</td><td class="num">50 Hz（视界 0.5–1.6 s）</td><td class="num">50 Hz（无显式视界）</td></tr>
+        <tr><td>需要什么</td><td>模型、接触序列、摩擦锥、权重矩阵</td><td>奖励函数、仿真器、随机化区间</td></tr>
+        <tr><td>约束处理</td><td>硬约束进 QP，不可行时可诊断</td><td>软约束进奖励，超限只扣分</td></tr>
+        <tr><td>延迟敏感度</td><td>高：延迟进模型，20 ms 已占视界 4%</td><td>中：延迟可进观测，也可以随机化</td></tr>
+        <tr><td>调参对象</td><td>6–12 个权重与约束边界</td><td>10–20 项奖励权重与随机化区间</td></tr>
+        <tr><td>失效模式</td><td>模型错 → 系统性偏差，可复现</td><td>分布外 → 突然摔倒，难复现</td></tr>
+        <tr><td>训练成本</td><td>0（设计即用）</td><td>1.5×10⁸ 样本，单卡 20 min–数小时</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <aside class="callout callout--intuition" data-reveal>
+    <p class="callout-kicker">直觉 <span>Intuition</span></p>
+    <p>策略优化的不是一次行走，而是一个分布：每个回合从随机初始状态、随机摩擦、随机延迟开始，最大化的是这些随机性上的期望回报。后果很具体——它会用 5% 的摔倒概率去换 10% 的平均速度。所以评估必须看最差 10%，不能只看平均。</p>
+  </aside>
+
+  <h2>把走路写成 MDP</h2>
+
+  <p>这一节解决的问题：把「走」翻译成五元组，并逐维检查观测在真机上拿不拿得到。</p>
+
+  <p>马尔可夫决策过程（Markov Decision Process, MDP）是五元组：状态 S、动作 A、转移 P、奖励 r、折扣 γ。RL 在这个框架里找策略 π(a|s)，使折扣回报的期望最大：</p>
+
+  <div class="formula-block">
+    <span class="formula">J(θ) = E<sub>τ∼π<sub>θ</sub></sub>[ Σ<sub>t=0</sub><sup>T</sup> γ<sup>t</sup> r<sub>t</sub> ]</span>
+    <span class="formula-no">7.1</span>
+  </div>
+
+  <p>θ 是策略网络参数，τ 是一条轨迹，γ 是折扣因子（legged_gym 系默认 0.99），T 是回合长度。γ 取小于 1，是让越远的奖励权重越小：回合再长，回报也收敛到一个有限值，策略因此先顾眼前；γ=1 时无限长回合的回报不收敛，远端的噪声也不会被压小，价值函数就没有稳定的目标可拟合。真机不是 MDP，是部分可观测马尔可夫决策过程（Partially Observable MDP, POMDP）：摩擦、负载、地形都不在状态里，只能从「指令与响应的历史」反推。工程上的处理不是去解 POMDP，而是把最近若干帧观测拼进输入，让网络自己从历史里读出环境。</p>
+
+  <h3>观测：47 维里没有一维是猜的</h3>
+
+  <p>以 G1 的 12 个腿部关节为例，legged_gym 系的默认观测是 47 维（图 7.1 下半部分按维度比例画出了它）：角速度 3（rad/s）、重力方向 3（机体系单位向量，无量纲）、速度指令 3（m/s 与 rad/s）、关节角 12（rad）、关节速度 12（rad/s）、上一动作 12（rad）、相位 sin/cos 2（无量纲）。</p>
+
+  <p>这 47 维有一个共同点：每一维都能从编码器与 IMU 直接算出来。基座线速度不在这里，它要靠状态估计（第 8 章）；地形高度也不在这里，它要靠感知或特权信息。选观测的第一条规则就是：真机拿不到的量，不进 actor。ASAP 的 actor 只用本体感知（Proprioception，只靠编码器、IMU 与电流感知自身状态）加相位变量，所以部署时连里程计都不需要。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 340" role="img" aria-labelledby="ch07-fig1-title ch07-fig1-desc">
+        <title id="ch07-fig1-title">MDP 闭环与 47 维观测向量的构成</title>
+        <desc id="ch07-fig1-desc">上半部分是观测、策略、动作、PD 与机器人组成的闭环，标注各环节的频率与维度。下半部分是 47 维观测的横条，按维度比例分为四段：状态 9 维、关节 24 维（关节角 12 维与关节速度 12 维，合并为一段）、上一动作 12 维、相位 2 维。</desc>
+
+        <defs>
+          <marker id="ch07-fig1-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--ink-2)"/>
+          </marker>
+        </defs>
+
+        <rect x="30" y="26" width="150" height="52" fill="none" stroke="var(--line-2)" stroke-width="1.2"/>
+        <text x="42" y="48" font-size="14" style="fill:var(--ink)">观测 o<tspan font-size="10" dy="3">t</tspan></text>
+        <text x="42" y="67" font-size="11.5" style="fill:var(--muted-ink)">47 维 · 50 Hz</text>
+
+        <rect x="215" y="26" width="170" height="52" fill="none" stroke="var(--line-2)" stroke-width="1.2"/>
+        <text x="227" y="48" font-size="14" style="fill:var(--ink)">策略 π<tspan font-size="10" dy="3">θ</tspan></text>
+        <text x="227" y="67" font-size="11.5" style="fill:var(--muted-ink)">MLP 512-256-128</text>
+
+        <rect x="420" y="26" width="150" height="52" fill="none" stroke="var(--line-2)" stroke-width="1.2"/>
+        <text x="432" y="48" font-size="14" style="fill:var(--ink)">动作 a<tspan font-size="10" dy="3">t</tspan></text>
+        <text x="432" y="67" font-size="11.5" style="fill:var(--muted-ink)">12 维 × 0.25 rad</text>
+
+        <rect x="420" y="104" width="150" height="48" fill="none" stroke="var(--line-2)" stroke-width="1.2"/>
+        <text x="432" y="125" font-size="14" style="fill:var(--ink)">关节 PD</text>
+        <text x="432" y="143" font-size="11.5" style="fill:var(--muted-ink)">1 kHz · kp 100/150/40</text>
+
+        <rect x="215" y="104" width="170" height="48" fill="none" stroke="var(--line-2)" stroke-width="1.2"/>
+        <text x="227" y="125" font-size="14" style="fill:var(--ink)">机器人</text>
+        <text x="227" y="143" font-size="11.5" style="fill:var(--muted-ink)">G1 23 DoF · 35 kg</text>
+
+        <line x1="180" y1="52" x2="211" y2="52" stroke="var(--ink-2)" stroke-width="1.2" marker-end="url(#ch07-fig1-arrow)"/>
+        <line x1="385" y1="52" x2="416" y2="52" stroke="var(--ink-2)" stroke-width="1.2" marker-end="url(#ch07-fig1-arrow)"/>
+        <line x1="495" y1="78" x2="495" y2="100" stroke="var(--ink-2)" stroke-width="1.2" marker-end="url(#ch07-fig1-arrow)"/>
+        <line x1="420" y1="128" x2="389" y2="128" stroke="var(--ink-2)" stroke-width="1.2" marker-end="url(#ch07-fig1-arrow)"/>
+        <polyline points="215,128 105,128 105,82" fill="none" stroke="var(--ink-2)" stroke-width="1.2" marker-end="url(#ch07-fig1-arrow)"/>
+        <text x="112" y="146" font-size="11.5" style="fill:var(--muted-ink)">编码器 + IMU</text>
+
+        <text x="30" y="196" font-size="12" style="fill:var(--ink-2)">47 维观测的构成（按维度比例）</text>
+
+        <rect x="30" y="208" width="103.4" height="28" style="fill:var(--d3);fill-opacity:.18" stroke="var(--d3)" stroke-width="1"/>
+        <rect x="133.4" y="208" width="275.7" height="28" style="fill:var(--d1);fill-opacity:.16" stroke="var(--d1)" stroke-width="1"/>
+        <rect x="409.1" y="208" width="137.9" height="28" style="fill:var(--d2);fill-opacity:.16" stroke="var(--d2)" stroke-width="1"/>
+        <rect x="547.0" y="208" width="23.0" height="28" style="fill:var(--d4);fill-opacity:.18" stroke="var(--d4)" stroke-width="1"/>
+
+        <g font-size="12" text-anchor="middle" style="fill:var(--ink)">
+          <text x="81.7" y="227">9</text>
+          <text x="271.3" y="227">24</text>
+          <text x="478.1" y="227">12</text>
+          <text x="558.5" y="227">2</text>
+        </g>
+
+        <g font-size="12" style="fill:var(--ink-2)">
+          <rect x="30" y="252" width="10" height="10" style="fill:var(--d3);fill-opacity:.35" stroke="var(--d3)" stroke-width="1"/>
+          <text x="46" y="261">状态 9：ω 3 + g 3 + 指令 3</text>
+          <rect x="232" y="252" width="10" height="10" style="fill:var(--d1);fill-opacity:.3" stroke="var(--d1)" stroke-width="1"/>
+          <text x="248" y="261">关节 24：角度 12 + 角速度 12</text>
+          <rect x="414" y="252" width="10" height="10" style="fill:var(--d2);fill-opacity:.3" stroke="var(--d2)" stroke-width="1"/>
+          <text x="430" y="261">上一动作 12</text>
+          <rect x="530" y="252" width="10" height="10" style="fill:var(--d4);fill-opacity:.35" stroke="var(--d4)" stroke-width="1"/>
+          <text x="546" y="261">相位 2</text>
+        </g>
+
+        <text x="30" y="292" font-size="12" style="fill:var(--muted-ink)">全部 47 维来自编码器与 IMU，没有一维需要外部传感器。</text>
+        <text x="30" y="312" font-size="12" style="fill:var(--signal-ink)">地形高度、接触力、基座线速度不在这里——它们只在 critic 或教师网络里。</text>
+        <text x="30" y="332" font-size="11.5" style="fill:var(--muted-ink)">注：维度顺序按 legged_gym 的默认排列；单位见正文。</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 7.1</span>MDP 闭环与 G1 的 47 维观测构成：状态 9、关节 24、上一动作 12、相位 2。频率标注为 legged_gym / unitree_rl_gym 的典型配置。
+      <span class="fig-note read-for">读者应看出：actor 的输入全部是本体感知，一维外部信息都没有——这不是简化，而是部署时唯一能保证拿到的集合。</span>
+      <span class="fig-src">来源：作者绘制，维度按 12 个腿部关节的 G1 配置计算，频率取 50 Hz 策略 + 1 kHz PD。</span>
+    </figcaption>
+  </figure>
+
+  <h3>动作：为什么给目标角而不是力矩</h3>
+
+  <p>动作是 12 维关节目标增量，乘 0.25 rad 后加到默认站姿上，再送给 1 kHz 的 PD。为什么是位置目标而不是力矩：PD 环把模型误差吸收在增益里，策略只需要给出「大致往哪走」；力矩动作要求策略自己承担重力补偿与摩擦，对延迟和力矩常数漂移都更敏感。G1 的膝 PD 是 kp=150、kd=4，0.1 rad 的目标误差就是 15 N·m，这个量级足以把 35 kg 的机身推起来，也足以在撞到限位时烧掉驱动器——所以动作必须限幅。OmniH2O 是少数直接输出力矩的例子，代价是它必须把整个 20 ms 环路都算进策略的观测里。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 7.2 一个行走策略的奖励清单（权重取自 legged_gym / unitree_rl_gym 量级）</caption>
+      <thead>
+        <tr><th>奖励项</th><th>形式</th><th class="num">权重</th><th>教给策略什么</th><th>权重过大时</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>线速度跟踪</td><td>exp(−5‖v−v*‖²)</td><td class="num">+1.0</td><td>跟上指令</td><td>前倾、抢步、脚打滑</td></tr>
+        <tr><td>角速度跟踪</td><td>exp(−2.5(ω<sub>z</sub>−ω<sub>z</sub>*)²)</td><td class="num">+0.5</td><td>转向</td><td>原地扭腰</td></tr>
+        <tr><td>存活</td><td>常数 / 步</td><td class="num">+0.15</td><td>别摔</td><td>站着不动</td></tr>
+        <tr><td>躯干高度</td><td>−(h−0.75)²</td><td class="num">−10</td><td>保持站姿高度</td><td>蹲着走</td></tr>
+        <tr><td>姿态</td><td>−‖g<sub>xy</sub>‖²</td><td class="num">−1.0</td><td>躯干水平</td><td>不敢迈步</td></tr>
+        <tr><td>动作变化率</td><td>−‖a<sub>t</sub>−a<sub>t−1</sub>‖²</td><td class="num">−0.01</td><td>动作平滑</td><td>抖腿、高频振动</td></tr>
+        <tr><td>足滑</td><td>−‖v<sub>foot</sub>‖²·contact</td><td class="num">−0.05</td><td>踩实再蹬</td><td>不敢抬脚</td></tr>
+        <tr><td>关节限位</td><td>−max(0, |q|−q<sub>max</sub>)²</td><td class="num">−5</td><td>别撞限位</td><td>腿伸不直</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>奖励的量级都压在 O(1)。不要用 1000 分制：PPO 的价值函数拟合的是回报的绝对值，回报到 1×10³ 时 value loss 在前 50 次迭代里会明显更大，学习率要跟着降。奖励里可以用真机拿不到的量（比如基座真实速度），因为奖励只在训练时计算；actor 不行。</p>
+
+  <p>终止条件决定策略怕什么。常用四条：躯干高度低于 0.25 m、倾角超过 0.8 rad、非足部连杆触地、单回合超过 20 s（50 Hz 下 1000 步）。前三条是失败，第四条只是截断——超时按失败处理会让价值估计在接近 20 s 时突然掉，策略容易学到「快到点就放弃」的怪行为。正确做法是截断时用 V(s<sub>T</sub>) 续上，而不是把回报记成 0。</p>
+
+  <h2>PPO：四行公式，三个旋钮</h2>
+
+  <p>这一节解决的问题：说清 PPO 每一步在优化什么，以及 ε、λ、熵三个旋钮拧大拧小的后果。</p>
+
+  <p>策略梯度（policy gradient）只有一句话：让拿到正优势的动作下次更可能发生，<span class="formula-inline">∇J = E[∇ log π<sub>θ</sub>(a|s) Â]</span>。Â 是优势（advantage），表示这个动作比「平均水平」好多少。问题是 Â 的估计方差很大，直接用会让更新抖得没法用。PPO 做了两件事：用广义优势估计（Generalized Advantage Estimation, GAE）把优势估稳，用 clip 把每步更新的幅度限死。</p>
+
+  <div class="formula-block">
+    <span class="formula">L(θ) = E<sub>t</sub>[ min( ρ<sub>t</sub>Â<sub>t</sub>, clip(ρ<sub>t</sub>, 1−ε, 1+ε)Â<sub>t</sub> ) ]</span>
+    <span class="formula-no">7.2</span>
+  </div>
+
+  <p>先补两个后面反复要用的记号。V(s) 是价值函数：从状态 s 出发、按当前策略一直走到回合结束所能拿到的折扣回报期望，可以理解为「站在这个状态值多少分」。δ<sub>t</sub> 是时序差分残差（temporal-difference residual）：这一步实际拿到的奖励加下一步价值的折扣，减去本来的预期，也就是「这一步比预期好多少」。正数说明比预想的好，负数说明比预想的差。</p>
+
+  <div class="formula-block">
+    <span class="formula">δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>),&nbsp;&nbsp;&nbsp; Â<sub>t</sub> = Σ<sub>l≥0</sub> (γλ)<sup>l</sup> δ<sub>t+l</sub></span>
+    <span class="formula-no">7.3</span>
+  </div>
+
+  <p>ρ<sub>t</sub> 是新旧策略在同一状态下选同一动作的概率比，ρ=1 表示没变。ε=0.2 的意思是：一次梯度步里这个比值最多被推到 0.8 或 1.2，再往外梯度截断。它约束的不是参数距离，而是动作概率的变化幅度——比 KL 散度（Kullback-Leibler divergence）约束便宜，效果接近，这是 PPO 在 2017 年之后统治腿足 RL 的直接原因。</p>
+
+  <p>GAE 把 TD 残差按 (γλ)<sup>l</sup> 加权叠起来。λ=0 只看一步，偏差大方差小；λ=1 看完整回合，方差大偏差小。工程默认 γ=0.99、λ=0.95，有效视野 1/(1−γλ) ≈ 17 步；策略 50 Hz 时是 0.34 s。也就是说，策略直接优化的只有未来 0.34 s 的后果，更远的信用分配全靠价值函数 V 去压缩。这个数字解释了一个常见现象：策略能在一秒内恢复平衡，但学不会为三秒后的落脚点做准备——那需要 MPC 或一个更强的世界模型。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch07-fig2-title ch07-fig2-desc">
+        <title id="ch07-fig2-title">PPO 裁剪目标随概率比变化的形状</title>
+        <desc id="ch07-fig2-desc">横轴为概率比 ρ 从 0 到 2.2；纵轴为裁剪目标 L，线性刻度，0 居中，+1 与 −1 到 0 等距。优势为正时 L 在 ρ 小于 1.2 段随 ρ 线性上升，之后平在 +1.2；优势为负时 L 在 ρ 小于 0.8 段平在 −0.8，之后随 ρ 线性下降，ρ=2.2 时到 −2.2。</desc>
+
+        <rect x="240.9" y="30" width="85.5" height="220" style="fill:var(--d1);fill-opacity:.06"/>
+
+        <g stroke="var(--line)" stroke-width=".5" stroke-dasharray="2 4">
+          <line x1="70" y1="63" x2="540" y2="63"/>
+          <line x1="70" y1="173" x2="540" y2="173"/>
+          <line x1="70" y1="228" x2="540" y2="228"/>
+        </g>
+
+        <line x1="70" y1="118" x2="540" y2="118" stroke="var(--line-2)" stroke-width="1"/>
+        <line x1="70" y1="30" x2="70" y2="250" stroke="var(--line-2)" stroke-width="1"/>
+
+        <line x1="70" y1="118" x2="326.4" y2="52" stroke="var(--d1)" stroke-width="1.8"/>
+        <line x1="326.4" y1="52" x2="540" y2="52" stroke="var(--d1)" stroke-width="1.8"/>
+        <line x1="70" y1="162" x2="240.9" y2="162" stroke="var(--d2)" stroke-width="1.8"/>
+        <line x1="240.9" y1="162" x2="540" y2="239" stroke="var(--d2)" stroke-width="1.8"/>
+
+        <circle cx="326.4" cy="52" r="3" style="fill:var(--d1)"/>
+        <circle cx="240.9" cy="162" r="3" style="fill:var(--d2)"/>
+
+        <g class="t-mono" font-size="12" style="fill:var(--muted-ink)">
+          <text x="70" y="134" text-anchor="middle">0</text>
+          <text x="240.9" y="134" text-anchor="middle">0.8</text>
+          <text x="326.4" y="134" text-anchor="middle">1.2</text>
+          <text x="497.3" y="134" text-anchor="middle">2.0</text>
+          <text x="540" y="134" text-anchor="end">2.2</text>
+          <text x="60" y="122" text-anchor="end">0</text>
+          <text x="60" y="67" text-anchor="end">+1</text>
+          <text x="60" y="177" text-anchor="end">−1</text>
+          <text x="60" y="232" text-anchor="end">−2</text>
+        </g>
+
+        <text x="540" y="282" font-size="12" text-anchor="end" style="fill:var(--ink-2)">概率比 ρ = π<tspan font-size="9" dy="3">θ</tspan><tspan dy="-3">(a|s) / π</tspan><tspan font-size="9" dy="3">θold</tspan><tspan dy="-3">(a|s)</tspan></text>
+        <text x="34" y="140" font-size="12" text-anchor="middle" transform="rotate(-90 34 140)" style="fill:var(--ink-2)">裁剪目标 L</text>
+
+        <text x="336" y="80" font-size="12" style="fill:var(--d1)">Â &gt; 0：ρ &gt; 1.2 后平在 +1.2，梯度为 0</text>
+        <text x="76" y="154" font-size="12" style="fill:var(--d2)">Â &lt; 0：ρ &lt; 0.8 时恒为 −0.8</text>
+        <text x="76" y="222" font-size="12" style="fill:var(--d2)">越过 0.8 后按斜率 −1 下降，ρ = 2.2 时到 −2.2</text>
+        <text x="283" y="98" font-size="11.5" text-anchor="middle" style="fill:var(--ink-2)">ε = 0.2</text>
+        <line x1="283" y1="104" x2="283" y2="118" stroke="var(--ink-2)" stroke-width=".8"/>
+
+        <text x="70" y="24" font-size="12" style="fill:var(--muted-ink)">截断区的意义：动作概率最多挪 20%，再远就不给梯度</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 7.2</span>PPO 的裁剪目标，纵轴为线性刻度：Â=+1 在 ρ 越过 1.2 后平在 +1.2；Â=−1 在 ρ&lt;0.8 时恒为 −0.8，之后按斜率 −1 下降，ρ=2.2 时到 −2.2。ε=0.2 对应图中阴影带宽。
+      <span class="fig-note read-for">读者应看出：裁剪只关掉「继续往同方向推」的梯度，不惩罚已经走远的策略——所以 ε 太大时策略仍会一步跨过头，只是那一步不再被纠正。</span>
+      <span class="fig-src">来源：作者按式 7.2 绘制，取单样本 Â=±1、ε=0.2。</span>
+    </figcaption>
+  </figure>
+
+  <p>下面的训练循环是伪代码，省略了网络定义、观测归一化与 checkpoint 逻辑。真正的实现（legged_gym 的 <code>OnPolicyRunner</code>）大约 200 行，骨架就是这 21 行。两个容易看错的地方先说清：reset 只在训练开始时做一次，单个环境回合结束（done）后由 <code>env.step</code> 内部自动重置（legged_gym 的 <code>reset_idx</code>）；24 步是 PPO 的一次 rollout 片段，不是回合长度——回合可以长到 1000 步，横跨几十个 iteration。</p>
+
+  <pre data-lang="python"><code><span class="tok-c"># 伪代码：PPO 主循环。4096 个环境，每轮 24 步，共 1500 轮</span>
+obs = env.reset()                           <span class="tok-c"># (4096, 47)，只在开头做一次</span>
+<span class="tok-k">for</span> it <span class="tok-k">in</span> range(<span class="tok-n">1500</span>):
+    <span class="tok-k">for</span> t <span class="tok-k">in</span> range(<span class="tok-n">24</span>):
+        a, logp, v = policy(obs)            <span class="tok-c"># 单次前向 &lt; 1 ms</span>
+        obs2, r, done, info = env.step(a)   <span class="tok-c"># 仿真 5 ms × 4 = 20 ms；done 重置</span>
+        buf.add(obs, a, r, done, logp, v)
+        obs = obs2
+    <span class="tok-c"># 24 步只是片段：回合边界按 done 截断，超时的用 V(s_T) 续上，不能记 0</span>
+    adv, ret = gae(buf, last_v, gamma=<span class="tok-n">0.99</span>, lam=<span class="tok-n">0.95</span>)  <span class="tok-c"># 视野 ≈ 17 步</span>
+    adv = (adv - adv.mean()) / (adv.std() + <span class="tok-n">1e-8</span>)
+    <span class="tok-c"># 同一批数据训 5 个 epoch，每次切 4 个 minibatch</span>
+    <span class="tok-k">for</span> epoch <span class="tok-k">in</span> range(<span class="tok-n">5</span>):
+        <span class="tok-k">for</span> mb <span class="tok-k">in</span> buf.minibatches(<span class="tok-n">4</span>):
+            ratio = (policy.logp(mb) - mb.logp).exp()
+            surr = torch.min(ratio * mb.adv,
+                             ratio.clamp(<span class="tok-n">0.8</span>, <span class="tok-n">1.2</span>) * mb.adv)  <span class="tok-c"># ε=0.2</span>
+            loss = (-surr.mean()
+                    - <span class="tok-n">0.01</span> * policy.entropy(mb)          <span class="tok-c"># 熵奖励，买探索</span>
+                    + <span class="tok-n">0.5</span> * (policy.value(mb) - mb.ret).pow(<span class="tok-n">2</span>).mean())
+            opt.zero_grad(); loss.backward(); opt.step()</code></pre>
+
+  <p>三个旋钮的后果可以背下来：ε=0.1 学得慢，1500 次迭代不够收敛；ε=0.3 步子大，回报曲线常在 300–500 次之间崩一次，KL 突增 5–10 倍；λ=0.9 更短视但价值函数好学，λ=0.99 方差大、batch 要跟着加倍；熵 0 会早熟，常见结果是单腿跳或拖脚走，熵 0.05 步态抖，动作变化率惩罚压不住。这些不是定理，是 legged_gym 系配置里反复出现的经验值。</p>
+
+  <p>同策略（on-policy，只用当前策略刚采到的数据训练）在机器人上常用，不是因为样本效率高（它很低），而是因为数据分布永远等于当前策略。域随机化（Domain Randomization, DR）会把分布拉得很宽，异策略（off-policy）的 replay buffer 里混着旧策略在旧参数下的数据，重要性采样比容易炸。4096 个环境把 on-policy 的样本成本摊平了——这是下一节的内容。</p>
+
+  <h2>几千台机器人同时摔</h2>
+
+  <p>这一节解决的问题：样本从哪来，为什么 GPU 并行把「不可能」变成「20 分钟」。</p>
+
+  <p>Isaac Gym 的关键设计只有一句：物理仿真与策略网络在同一张 GPU 上，数据不出显存。传统流程是 CPU 算物理、GPU 算网络，每一步都要过 PCIe；4096 个环境时总线成为瓶颈。同卡之后，4096 个环境一次前向、一次反向，吞吐提高 2–3 个数量级。</p>
+
+  <p>Rudin 等 2021 的报告值：4096 台 ANYmal，含渲染约 9 GB 显存；每轮 24 步，batch 98304；1500 轮；平地不到 4 分钟，崎岖地形 20 分钟。折算样本量 4096 × 24 × 1500 ≈ 1.5×10⁸，平均 1.2×10⁵ 样本/秒。</p>
+
+  <p>对比一下真机：一台 50 Hz 采样的机器人，一秒 50 个样本。同样的 1.5×10⁸ 要 34 天不间断；按每回合 20 s（1000 步）算，是 15 万个回合，每次摔倒后有人去扶、平均 30 s，光扶机器人就要 52 天。并行仿真的价值不是「快一点」，是把「需要 15 万次物理重启」的实验变成「不需要重启」。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch07-fig3-title ch07-fig3-desc">
+        <title id="ch07-fig3-title">吞吐与墙钟时间随并行环境数的变化</title>
+        <desc id="ch07-fig3-desc">横轴为并行环境数 128 到 16384，对数刻度。左纵轴为样本吞吐，从每秒 3750 个近线性升到 48 万个；右纵轴为训练到收敛的墙钟时间，从 120 分钟降到 4096 环境的 20 分钟，之后回升到 30 分钟。</desc>
+
+        <g stroke="var(--line)" stroke-width=".5" stroke-dasharray="2 4">
+          <line x1="70" y1="240" x2="520" y2="240"/>
+          <line x1="70" y1="198" x2="520" y2="198"/>
+          <line x1="70" y1="156" x2="520" y2="156"/>
+          <line x1="70" y1="114" x2="520" y2="114"/>
+          <line x1="70" y1="72" x2="520" y2="72"/>
+          <line x1="70" y1="30" x2="520" y2="30"/>
+        </g>
+
+        <line x1="391.4" y1="30" x2="391.4" y2="240" stroke="var(--d4)" stroke-width="1" stroke-dasharray="5 4"/>
+        <text x="386" y="24" font-size="11.5" text-anchor="end" style="fill:var(--d4)">4096：20 min</text>
+
+        <line x1="70" y1="240" x2="520" y2="240" stroke="var(--line-2)" stroke-width="1"/>
+        <line x1="70" y1="240" x2="70" y2="30" stroke="var(--line-2)" stroke-width="1"/>
+        <line x1="520" y1="240" x2="520" y2="30" stroke="var(--line-2)" stroke-width="1"/>
+
+        <polyline points="70.0,238.4 134.3,236.8 198.6,233.7 262.9,227.4 327.1,214.8 391.4,189.6 455.7,139.2 520.0,38.4"
+                  fill="none" stroke="var(--d1)" stroke-width="1.8"/>
+        <g style="fill:var(--d1)">
+          <circle cx="70" cy="238.4" r="3"/><circle cx="134.3" cy="236.8" r="3"/>
+          <circle cx="198.6" cy="233.7" r="3"/><circle cx="262.9" cy="227.4" r="3"/>
+          <circle cx="327.1" cy="214.8" r="3"/><circle cx="391.4" cy="189.6" r="3"/>
+          <circle cx="455.7" cy="139.2" r="3"/><circle cx="520" cy="38.4" r="3"/>
+        </g>
+
+        <polyline points="70.0,60.0 134.3,135.0 198.6,177.0 262.9,198.0 327.1,207.0 391.4,210.0 455.7,205.5 520.0,195.0"
+                  fill="none" stroke="var(--d2)" stroke-width="1.8" stroke-dasharray="6 4"/>
+        <g style="fill:var(--d2)">
+          <circle cx="70" cy="60" r="3"/><circle cx="134.3" cy="135" r="3"/>
+          <circle cx="198.6" cy="177" r="3"/><circle cx="262.9" cy="198" r="3"/>
+          <circle cx="327.1" cy="207" r="3"/><circle cx="391.4" cy="210" r="3"/>
+          <circle cx="455.7" cy="205.5" r="3"/><circle cx="520" cy="195" r="3"/>
+        </g>
+
+        <g class="t-mono" font-size="11.5" style="fill:var(--muted-ink)">
+          <text x="70" y="258" text-anchor="middle">128</text>
+          <text x="134.3" y="258" text-anchor="middle">256</text>
+          <text x="198.6" y="258" text-anchor="middle">512</text>
+          <text x="262.9" y="258" text-anchor="middle">1k</text>
+          <text x="327.1" y="258" text-anchor="middle">2k</text>
+          <text x="391.4" y="258" text-anchor="middle">4k</text>
+          <text x="455.7" y="258" text-anchor="middle">8k</text>
+          <text x="520" y="258" text-anchor="middle">16k</text>
+        </g>
+        <g class="t-mono" font-size="10.5" style="fill:var(--muted-ink)">
+          <text x="64" y="244" text-anchor="end">0</text>
+          <text x="64" y="202" text-anchor="end">1×10⁵</text>
+          <text x="64" y="160" text-anchor="end">2×10⁵</text>
+          <text x="64" y="118" text-anchor="end">3×10⁵</text>
+          <text x="64" y="76" text-anchor="end">4×10⁵</text>
+          <text x="64" y="34" text-anchor="end">5×10⁵</text>
+          <text x="528" y="244" text-anchor="start">0</text>
+          <text x="528" y="202" text-anchor="start">28</text>
+          <text x="528" y="160" text-anchor="start">56</text>
+          <text x="528" y="118" text-anchor="start">84</text>
+          <text x="528" y="76" text-anchor="start">112</text>
+          <text x="528" y="34" text-anchor="start">140</text>
+        </g>
+
+        <text x="520" y="278" font-size="12" text-anchor="end" style="fill:var(--ink-2)">并行环境数（对数）</text>
+        <text x="15" y="135" font-size="12" text-anchor="middle" transform="rotate(-90 15 135)" style="fill:var(--ink-2)">吞吐 / 样本每秒</text>
+        <text x="576" y="135" font-size="12" text-anchor="middle" transform="rotate(90 576 135)" style="fill:var(--ink-2)">墙钟时间 / min</text>
+
+        <g font-size="12" style="fill:var(--ink-2)">
+          <line x1="200" y1="46" x2="224" y2="46" stroke="var(--d1)" stroke-width="1.8"/>
+          <text x="230" y="50">样本吞吐（左轴）</text>
+          <line x1="200" y1="64" x2="224" y2="64" stroke="var(--d2)" stroke-width="1.8" stroke-dasharray="6 4"/>
+          <text x="230" y="68">到收敛的墙钟（右轴）</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 7.3</span>并行环境数对吞吐与训练墙钟时间的影响：吞吐随环境数近线性上升，墙钟时间在 4096 处见底（20 min），再往上因为每个环境分到的样本变少而回升。
+      <span class="fig-note read-for">读者应看出：两条线的拐点不在同一处——吞吐一直涨，但「训得好」的最优点在 2048–4096，继续加环境只是把同样的样本切得更碎。</span>
+      <span class="fig-src">来源：4096 点取 Rudin 等 2021 的报告值（崎岖地形 20 min、4096 环境、batch 98304），其余为按同比例推算的量级示意。</span>
+    </figcaption>
+  </figure>
+
+  <p>并行度不是越大越好。超过 4096 之后，每个环境分到的样本变少，策略在单个环境上的探索不足；显存与通信开销同时上升。工程上 2048–8192 是常用区间，人形因为自由度多、显存占用大，常取 4096。Isaac Gym 官方页已标废弃，新项目从 <a href="https://github.com/isaac-sim/IsaacLab">Isaac Lab</a> 起步；不想装 Isaac Sim 的话，MuJoCo Playground（MJX）能在单卡上几分钟训出一个策略，适合教学与快速验证。</p>
+
+  <p>训练完必须在第二个仿真器里复核，这一步叫 sim2sim 闸门。原因是接触参数：Isaac 的接触刚度与 MuJoCo 的 solref/solimp 不是一套东西，同一个策略在 Isaac 里能走、在 MuJoCo 里可能第一步就滑。Humanoid-Gym 把 Isaac→MuJoCo 写进了流水线，过不了闸门的策略不上真机。这和第 6 章的模型校验是同一件事的两种验收：模型派校验方程，学习派校验第二个仿真器。</p>
+
+  <h2>域随机化：把一台机器人变成一族</h2>
+
+  <p>这一节解决的问题：DR 为什么能补 gap，开多宽，代价是什么。</p>
+
+  <p>DR 把「一台机器人」换成「一族机器人」：每次重置，摩擦、质量、电机强度、延迟、传感器噪声都从区间里重新抽。优化目标从单个 MDP 变成 MDP 分布上的期望：</p>
+
+  <div class="formula-block">
+    <span class="formula">θ* = argmax<sub>θ</sub> E<sub>ξ∼p(ξ)</sub>[ J(θ; ξ) ]</span>
+    <span class="formula-no">7.5</span>
+  </div>
+
+  <p>ξ 是一次抽样（摩擦 0.8、负载 +2 kg、延迟 6 ms），p(ξ) 是那组区间。图 7.4 是这条式子的经验形态：无 DR 时成功率是一条窄峰，有 DR 时被压成一段平台。它的逻辑很朴素：真机的参数一定落在某个范围内，只要训练时见过这个范围内的最坏情况，策略就不至于完全失效。它把「估计参数」换成了「对参数不敏感」——这是 DR 最值钱的地方，因为估计总要时间，而不敏感是即时的。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 7.3 两套人形配置的域随机化区间</caption>
+      <thead>
+        <tr><th>参数</th><th>Humanoid-Gym</th><th>unitree_rl_gym（G1）</th><th>覆盖的物理原因</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>摩擦系数 μ</td><td class="num">0.1–2.0</td><td class="num">0.1–1.25</td><td>冰面到橡胶；地板打蜡</td></tr>
+        <tr><td>电机强度</td><td class="num">95–105%</td><td class="num">—</td><td>力矩常数 K<sub>t</sub> 温漂、母线电压从 58 V 掉到 48 V</td></tr>
+        <tr><td>附加负载</td><td class="num">±5 kg</td><td class="num">−1 至 +3 kg</td><td>背包、电池包、水</td></tr>
+        <tr><td>观测到执行延迟</td><td class="num">0–10 ms</td><td class="num">—</td><td>20 ms 端到端里可随机的那一段</td></tr>
+        <tr><td>关节位置噪声</td><td class="num">±0.05 rad</td><td class="num">—</td><td>编码器零位、谐波背隙</td></tr>
+        <tr><td>关节速度噪声</td><td class="num">±0.5 rad/s</td><td class="num">—</td><td>差分噪声、滤波延迟</td></tr>
+        <tr><td>推力扰动</td><td class="num">—</td><td class="num">每 5 s 推 1.5 m/s</td><td>被人撞、被门挡</td></tr>
+        <tr><td>地形</td><td>平地 + 斜坡 + 台阶</td><td>10×20 瓦片课程</td><td>接触几何变化</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>逐项说：摩擦 0.1–2.0 覆盖冰面到橡胶；电机强度 95–105% 覆盖 Kt 温漂与电池压降；负载 ±5 kg 覆盖背包与水；延迟 0–10 ms 覆盖观测到执行的那一段；关节位置 ±0.05 rad、速度 ±0.5 rad/s 覆盖编码器零位误差与噪声。地形与推力扰动是另外两类：前者改接触几何，后者改动量。</p>
+
+  <p>副作用有三个，都要认。第一，策略变保守：宽 DR 下最优策略是「对所有参数都不坏」，而不是「对某一个参数最好」，典型表现是步幅变短、屈膝更多、速度上不去。Humanoid-Gym 把摩擦开到 0.1–2.0，换来零样本迁移与偏保守的步态；G1 的配置只开 0.1–1.25。第二，性能上限下降：同一任务，宽 DR 的收敛回报通常比窄 DR 低 10–20%。第三，DR 会掩盖建模错误——如果仿真里的接触模型本身错了，随机化只是在错误上加噪声，学到的鲁棒性可能对真机无效。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch07-fig4-title ch07-fig4-desc">
+        <title id="ch07-fig4-title">有无域随机化的成功率随摩擦系数的变化</title>
+        <desc id="ch07-fig4-desc">横轴为摩擦系数 0.1 到 2.0，纵轴为成功率 0 到 100%。无随机化的曲线在 0.65 处达到 95%，两侧迅速塌到 0；有随机化的曲线在 0.2 到 1.7 之间保持约 90%，只在两端下降。阴影为训练采样区间。</desc>
+
+        <rect x="62" y="24" width="510" height="222" style="fill:var(--d1);fill-opacity:.045"/>
+        <g stroke="var(--line)" stroke-width=".5" stroke-dasharray="2 4">
+          <line x1="62" y1="246" x2="572" y2="246"/>
+          <line x1="62" y1="190.5" x2="572" y2="190.5"/>
+          <line x1="62" y1="135" x2="572" y2="135"/>
+          <line x1="62" y1="79.5" x2="572" y2="79.5"/>
+          <line x1="62" y1="24" x2="572" y2="24"/>
+        </g>
+
+        <line x1="62" y1="246" x2="572" y2="246" stroke="var(--line-2)" stroke-width="1"/>
+        <line x1="62" y1="246" x2="62" y2="24" stroke="var(--line-2)" stroke-width="1"/>
+
+        <path d="M62.0 245.9 L72.6 245.7 L83.2 245.2 L93.9 244.0 L104.5 241.4 L115.1 236.5 L125.8 227.6 L136.4 213.2 L147.0 191.9 L157.6 163.5 L168.2 129.6 L178.9 94.1 L189.5 62.8 L200.1 41.6 L210.7 35.2 L221.4 45.0 L232.0 68.7 L242.6 101.4 L253.2 137.0 L263.9 170.0 L274.5 197.0 L285.1 216.8 L295.8 229.9 L306.4 237.8 L317.0 242.1 L327.6 244.3 L338.2 245.3 L348.9 245.7 L359.5 245.9 L370.1 246.0 L380.8 246.0 L391.4 246.0 L402.0 246.0 L412.6 246.0 L423.2 246.0 L433.9 246.0 L444.5 246.0 L455.1 246.0 L465.8 246.0 L476.4 246.0 L487.0 246.0 L497.6 246.0 L508.2 246.0 L518.9 246.0 L529.5 246.0 L540.1 246.0 L550.8 246.0 L561.4 246.0 L572.0 246.0"
+              fill="none" stroke="var(--d2)" stroke-width="1.6" stroke-dasharray="6 4"/>
+
+        <path d="M62.0 97.3 L72.6 91.5 L83.2 77.7 L93.9 62.6 L104.5 51.5 L115.1 45.4 L125.8 42.9 L136.4 42.0 L147.0 41.8 L157.6 41.8 L168.2 41.8 L178.9 41.8 L189.5 41.8 L200.1 41.8 L210.7 41.8 L221.4 41.8 L232.0 41.8 L242.6 41.8 L253.2 41.8 L263.9 41.8 L274.5 41.8 L285.1 41.8 L295.8 41.8 L306.4 41.8 L317.0 41.8 L327.6 41.8 L338.2 41.8 L348.9 41.8 L359.5 41.8 L370.1 41.8 L380.8 41.8 L391.4 41.8 L402.0 41.8 L412.6 41.8 L423.2 41.8 L433.9 41.8 L444.5 41.8 L455.1 42.0 L465.8 42.4 L476.4 43.3 L487.0 45.3 L497.6 49.0 L508.2 55.4 L518.9 65.0 L529.5 77.6 L540.1 92.0 L550.8 105.8 L561.4 115.8 L572.0 119.5"
+              fill="none" stroke="var(--d1)" stroke-width="1.8"/>
+
+        <g class="t-mono" font-size="11.5" style="fill:var(--muted-ink)">
+          <text x="62" y="264" text-anchor="middle">0.1</text>
+          <text x="169.4" y="264" text-anchor="middle">0.5</text>
+          <text x="303.7" y="264" text-anchor="middle">1.0</text>
+          <text x="437.9" y="264" text-anchor="middle">1.5</text>
+          <text x="572" y="264" text-anchor="middle">2.0</text>
+          <text x="54" y="250" text-anchor="end">0</text>
+          <text x="54" y="194" text-anchor="end">25</text>
+          <text x="54" y="139" text-anchor="end">50</text>
+          <text x="54" y="83" text-anchor="end">75</text>
+          <text x="54" y="28" text-anchor="end">100</text>
+        </g>
+
+        <text x="572" y="284" font-size="12" text-anchor="end" style="fill:var(--ink-2)">摩擦系数 μ</text>
+        <text x="24" y="135" font-size="12" text-anchor="middle" transform="rotate(-90 24 135)" style="fill:var(--ink-2)">成功率 / %</text>
+
+        <g font-size="12" style="fill:var(--ink-2)">
+          <line x1="330" y1="52" x2="354" y2="52" stroke="var(--d2)" stroke-width="1.6" stroke-dasharray="6 4"/>
+          <text x="360" y="56">无 DR</text>
+          <line x1="330" y1="70" x2="354" y2="70" stroke="var(--d1)" stroke-width="1.8"/>
+          <text x="360" y="74">有 DR</text>
+        </g>
+
+        <g stroke="var(--d4)" stroke-width="1">
+          <line x1="115.7" y1="240" x2="115.7" y2="252"/>
+          <line x1="276.7" y1="240" x2="276.7" y2="252"/>
+          <line x1="115.7" y1="252" x2="276.7" y2="252"/>
+        </g>
+
+        <text x="70" y="20" font-size="11.5" style="fill:var(--muted-ink)">阴影 = 训练采样区间 0.1–2.0；下方括号 = 真机 μ 常见 0.3–0.9</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 7.4</span>域随机化把成功率曲线从「单峰」压成「平台」：无 DR 的策略只在训练摩擦附近有效，有 DR 的策略在 0.2–1.7 之间都能站住，代价是峰值从 95% 降到 92%。
+      <span class="fig-note read-for">读者应看出：平台的宽度由采样区间决定，真机 μ 必须落在平台里而不是边缘——区间边缘的成功率会掉到 70% 以下。</span>
+      <span class="fig-src">来源：示意曲线，趋势按 Humanoid-Gym 与 unitree_rl_gym 报告的定性结论绘制，纵轴非实测数据。</span>
+    </figcaption>
+  </figure>
+
+  <aside class="callout callout--field" data-reveal>
+    <p class="callout-kicker">工程经验 <span>Field Note</span></p>
+    <p>先量再开。摩擦用斜坡实验（抬到刚好滑动），质量用称重，延迟用示波器打「IMU 中断 → CAN 发出」的时间戳。量完把真值放在区间中间而不是边缘：策略在区间边缘表现最差，真值落在边缘等于主动挑最坏情况。区间宽度取实测不确定度的 2 倍，不要取 10 倍。</p>
+  </aside>
+
+  <h2>教师-学生与 RMA：把特权信息压进本体感知</h2>
+
+  <p>这一节解决的问题：特权信息只能训练时用，怎么把它压进只用本体感知的策略。</p>
+
+  <p>教师-学生蒸馏（Teacher-Student Distillation）是两阶段：教师能看到地形高度图、接触力、摩擦系数、基座真实速度——这些在仿真里免费，在真机上要么没有、要么很贵；学生只能看 47 维本体感知加一段历史。训练时先训教师，再让学生模仿教师的动作：</p>
+
+  <div class="formula-block">
+    <span class="formula">L<sub>distill</sub> = E<sub>t</sub>[ ‖ π<sub>S</sub>(o<sub>t</sub>, h<sub>t</sub>) − a<sub>t</sub><sup>T</sup> ‖<sup>2</sup> ]</span>
+    <span class="formula-no">7.6</span>
+  </div>
+
+  <p>损失就是动作的均方误差（或动作分布的 KL）。学生不是单纯模仿：实践中会在蒸馏损失上再加一份 RL 损失，让学生在教师没覆盖到的状态上继续用奖励改进。Miki 等 2022 用这套方法让 ANYmal 走雪地、流水与废墟，学生网络只吃本体感知。</p>
+
+  <p>RMA 把这条思路做得更省：它不蒸馏动作，而是把特权信息压成一个 8 维隐变量 ẑ，用一个自适应模块 φ 从 50 步历史（100 Hz 下 0.5 s）回归出来，10 Hz 更新；策略 π(a|o, ẑ) 跑 100 Hz。所谓隐变量，是一组没有物理名字的数：没有人规定第 3 维必须是摩擦、第 5 维必须是负载，网络是在回归特权信息的过程中，自己学会用这 8 个数编码摩擦、负载、地形这些慢变量（训练时教师侧先用一个编码器把 e<sub>t</sub> 压成 ẑ，φ 学的是它的输出）。8 维是容量与可学性的折中：再低，摩擦和负载会挤在同一维里互相干扰；再高，50 步历史里能提供的信息不够回归，只会拟合噪声。两个时钟的分工是：环境参数（摩擦、负载、地形）变化慢，10 Hz 够了；状态与动作变化快，100 Hz 才够。A1 的板载算力很低，这个解耦让它跑得动；代价是要两阶段训练，而且特权标签只在仿真里存在。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 330" role="img" aria-labelledby="ch07-fig5-title ch07-fig5-desc">
+        <title id="ch07-fig5-title">教师-学生蒸馏与 RMA 的双时钟结构</title>
+        <desc id="ch07-fig5-desc">上方教师网络接收地形高度、接触力、摩擦与基座速度等特权信息，输出动作；中间是蒸馏损失；下方学生网络只接收 47 维本体感知与 10 Hz 更新的隐变量 ẑ。各框下方标注 100 Hz 与 10 Hz 两条时钟。</desc>
+
+        <defs>
+          <marker id="ch07-fig5-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--ink-2)"/>
+          </marker>
+          <marker id="ch07-fig5-arrow-d4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d4)"/>
+          </marker>
+        </defs>
+
+        <rect x="30" y="26" width="240" height="86" fill="none" stroke="var(--line-2)" stroke-width="1.2"/>
+        <text x="42" y="48" font-size="14" style="fill:var(--ink)">教师 π<tspan font-size="10" dy="3">T</tspan><tspan dy="-3">(a | s, e</tspan><tspan font-size="10" dy="3">t</tspan><tspan dy="-3">)</tspan></text>
+        <text x="42" y="70" font-size="11.5" style="fill:var(--muted-ink)">特权：地形高度图 · 接触力</text>
+        <text x="42" y="88" font-size="11.5" style="fill:var(--muted-ink)">摩擦系数 · 基座真实线速度</text>
+        <text x="42" y="106" font-size="11.5" style="fill:var(--signal-ink)">只在仿真里存在</text>
+
+        <rect x="330" y="46" width="170" height="46" fill="none" stroke="var(--d4)" stroke-width="1.2" stroke-dasharray="5 4"/>
+        <text x="342" y="66" font-size="12.5" style="fill:var(--ink)">蒸馏 L = ‖a<tspan font-size="9" dy="3">S</tspan><tspan dy="-3"> − a</tspan><tspan font-size="9" dy="3">T</tspan><tspan dy="-3">‖²</tspan></text>
+        <text x="342" y="84" font-size="11.5" style="fill:var(--muted-ink)">再叠一份 RL 损失继续微调</text>
+
+        <line x1="270" y1="69" x2="326" y2="69" stroke="var(--ink-2)" stroke-width="1.2" marker-end="url(#ch07-fig5-arrow)"/>
+        <line x1="415" y1="92" x2="415" y2="130" stroke="var(--d4)" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#ch07-fig5-arrow-d4)"/>
+
+        <rect x="300" y="134" width="250" height="84" fill="none" stroke="var(--line-2)" stroke-width="1.2"/>
+        <text x="312" y="156" font-size="14" style="fill:var(--ink)">学生 π<tspan font-size="10" dy="3">S</tspan><tspan dy="-3">(a | o</tspan><tspan font-size="10" dy="3">t</tspan><tspan dy="-3">, ẑ</tspan><tspan font-size="10" dy="3">t</tspan><tspan dy="-3">)</tspan></text>
+        <text x="312" y="178" font-size="11.5" style="fill:var(--muted-ink)">o：47 维本体感知，100 Hz</text>
+        <text x="312" y="196" font-size="11.5" style="fill:var(--muted-ink)">ẑ：8 维隐变量，10 Hz</text>
+        <text x="312" y="212" font-size="11.5" style="fill:var(--accent)">部署时只剩这条路</text>
+
+        <rect x="30" y="134" width="230" height="84" fill="none" stroke="var(--line-2)" stroke-width="1.2"/>
+        <text x="42" y="156" font-size="13" style="fill:var(--ink)">自适应 φ(h<tspan font-size="9" dy="3">t</tspan><tspan dy="-3">) → ẑ</tspan></text>
+        <text x="42" y="178" font-size="11.5" style="fill:var(--muted-ink)">历史 50 步 ≈ 0.5 s</text>
+        <text x="42" y="196" font-size="11.5" style="fill:var(--muted-ink)">从「指令 vs 响应」反推环境</text>
+        <text x="42" y="212" font-size="11.5" style="fill:var(--muted-ink)">10 Hz 更新，A1 上算得动</text>
+
+        <line x1="260" y1="176" x2="296" y2="176" stroke="var(--ink-2)" stroke-width="1.2" marker-end="url(#ch07-fig5-arrow)"/>
+
+        <text x="425" y="234" font-size="11.5" text-anchor="middle" style="fill:var(--muted-ink)">100 Hz · 10 ms</text>
+        <text x="145" y="234" font-size="11.5" text-anchor="middle" style="fill:var(--d4)">10 Hz · 100 ms</text>
+
+        <text x="30" y="266" font-size="12" style="fill:var(--ink-2)">慢变量（摩擦、负载、地形）走 10 Hz；快变量（姿态、接触）走 100 Hz。</text>
+        <text x="30" y="288" font-size="12" style="fill:var(--muted-ink)">两条时钟分开，是 RMA 能在低算力板子上跑起来的原因。</text>
+        <text x="30" y="312" font-size="12" style="fill:var(--signal-ink)">历史窗口太短识别不出负载，太长则适应滞后——0.5 s 是折中。</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 7.5</span>教师-学生蒸馏与 RMA 的双时钟：教师用特权信息，学生只用 47 维本体感知加一段历史；RMA 把特权压成 8 维隐变量，10 Hz 更新。
+      <span class="fig-note read-for">读者应看出：特权信息只在训练链路里，部署链路上一个箭头都没有——这就是「蒸馏」两个字的全部含义。</span>
+      <span class="fig-src">来源：作者按 RMA（Kumar 等 2021）与 Miki 等 2022 的结构绘制，频率取论文报告值。</span>
+    </figcaption>
+  </figure>
+
+  <p>失败模式很具体：历史窗口太短，5 kg 的背包在 0.2 s 内识别不出来，策略前几步会当没背；窗口太长，遇到台阶时 ẑ 还在描述上一段地形，适应滞后 0.5 s，足够摔一次。另一个坑是噪声：如果仿真的 IMU 噪声是白噪声、真机是有色噪声，学生会把仿真噪声的统计特征当成线索，部署后线索消失，性能掉得比不做蒸馏还多。</p>
+
+  <h2>运动模仿：奖励写不出「像人」</h2>
+
+  <p>这一节解决的问题：纯任务奖励走不出自然步态，模仿怎么补上「像人」。</p>
+
+  <p>纯速度奖励训出来的步态能用，但不好看：手臂不摆、脚掌拍地、躯干左右晃。原因是奖励只写了「多快」，没写「怎么走」。运动模仿（motion imitation）把一段参考动作（动捕或遥操作）变成奖励的一部分。</p>
+
+  <p>DeepMimic 用相位对齐的参考跟踪：把参考动作按相位变量对齐，奖励是各关节角误差的指数核之和。它要求参考动作与机器人骨架一一对应，人形与人的身高差 40 cm 时，重定向（retargeting）本身就是一个课题。AMP 换掉了逐帧参考：训练一个判别器 D(s, s′) 区分「参考动作的转移」与「策略的转移」，策略的风格奖励随 D 接近 1 而增大。好处是不需要相位对齐，一段 30 s 的动捕就能用；代价是判别器会被策略钻空子——策略找到判别器的盲点，动作退化成高频抖动，所以 AMP 必须加梯度惩罚与动作平滑正则。ExBody 的选择更保守：上半身 9 个执行器跟踪 18 个关键点，下半身只跟根速度。理由是全身模仿会牺牲行走稳定性——论文里的全身版本出现「参考走一步、机器人走多步」的伪影，代价是下半身的风格不保真。</p>
+
+  <p>为什么模仿比纯奖励自然：奖励写不出「脚跟着地、然后重心前移、再蹬地」这种时序，参考动作里有。策略不需要理解为什么，只需要复现。这也是模仿的局限：参考动作里没有的动作，策略也不会。</p>
+
+  <p>给一组数：ASAP 报告真机 MPJPE（mean per-joint position error，关节位置平均误差）126 mm，动作噪声微调的对照是 150 mm，仿真内是 44.3 mm。这组数说明两件事——仿真内的跟踪精度比真机好约 3 倍，sim2real 的差距主要来自接触与延迟，而不是策略本身没学会。</p>
+
+  <h2>部署：50 Hz 的策略，1 kHz 的关节</h2>
+
+  <p>这一节解决的问题：把 .pt 变成一条能跑的 20 ms 循环，说清每一毫秒花在哪。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 278" role="img" aria-labelledby="ch07-fig6-title ch07-fig6-desc">
+        <title id="ch07-fig6-title">传感器、策略与关节 PD 的三层时序</title>
+        <desc id="ch07-fig6-desc">横轴为 0 到 60 毫秒。第一行 IMU 每 2.5 毫秒一次采样；第二行策略每 20 毫秒一次；第三行 PD 每 1 毫秒一次。标注一个策略周期内含 20 次 PD 更新，以及 20 毫秒的观测延迟。</desc>
+
+        <g class="t-mono" font-size="11.5" style="fill:var(--muted-ink)">
+          <text x="70" y="22" text-anchor="middle">0</text>
+          <text x="150" y="22" text-anchor="middle">10</text>
+          <text x="230" y="22" text-anchor="middle">20</text>
+          <text x="310" y="22" text-anchor="middle">30</text>
+          <text x="390" y="22" text-anchor="middle">40</text>
+          <text x="470" y="22" text-anchor="middle">50</text>
+          <text x="550" y="22" text-anchor="middle">60</text>
+        </g>
+        <text x="560" y="22" font-size="11.5" style="fill:var(--ink-2)">ms</text>
+
+        <text x="62" y="58" font-size="12" text-anchor="end" style="fill:var(--ink-2)">IMU</text>
+        <text x="62" y="74" font-size="10.5" text-anchor="end" style="fill:var(--muted-ink)">400 Hz</text>
+        <g stroke="var(--d3)" stroke-width="1.2">
+          <line x1="70" y1="48" x2="70" y2="70"/><line x1="90" y1="48" x2="90" y2="70"/>
+          <line x1="110" y1="48" x2="110" y2="70"/><line x1="130" y1="48" x2="130" y2="70"/>
+          <line x1="150" y1="48" x2="150" y2="70"/><line x1="170" y1="48" x2="170" y2="70"/>
+          <line x1="190" y1="48" x2="190" y2="70"/><line x1="210" y1="48" x2="210" y2="70"/>
+          <line x1="230" y1="48" x2="230" y2="70"/><line x1="250" y1="48" x2="250" y2="70"/>
+          <line x1="270" y1="48" x2="270" y2="70"/><line x1="290" y1="48" x2="290" y2="70"/>
+          <line x1="310" y1="48" x2="310" y2="70"/><line x1="330" y1="48" x2="330" y2="70"/>
+          <line x1="350" y1="48" x2="350" y2="70"/><line x1="370" y1="48" x2="370" y2="70"/>
+          <line x1="390" y1="48" x2="390" y2="70"/><line x1="410" y1="48" x2="410" y2="70"/>
+          <line x1="430" y1="48" x2="430" y2="70"/><line x1="450" y1="48" x2="450" y2="70"/>
+          <line x1="470" y1="48" x2="470" y2="70"/><line x1="490" y1="48" x2="490" y2="70"/>
+          <line x1="510" y1="48" x2="510" y2="70"/><line x1="530" y1="48" x2="530" y2="70"/>
+          <line x1="550" y1="48" x2="550" y2="70"/>
+        </g>
+
+        <text x="62" y="108" font-size="12" text-anchor="end" style="fill:var(--ink-2)">策略 π</text>
+        <text x="62" y="124" font-size="10.5" text-anchor="end" style="fill:var(--muted-ink)">50 Hz</text>
+        <line x1="70" y1="98" x2="550" y2="98" stroke="var(--line-2)" stroke-width=".8"/>
+        <g stroke="var(--d1)" stroke-width="2">
+          <line x1="70" y1="86" x2="70" y2="110"/><line x1="230" y1="86" x2="230" y2="110"/>
+          <line x1="390" y1="86" x2="390" y2="110"/><line x1="550" y1="86" x2="550" y2="110"/>
+        </g>
+        <g style="fill:var(--d1)">
+          <circle cx="70" cy="86" r="2.6"/><circle cx="230" cy="86" r="2.6"/>
+          <circle cx="390" cy="86" r="2.6"/><circle cx="550" cy="86" r="2.6"/>
+        </g>
+
+        <text x="62" y="158" font-size="12" text-anchor="end" style="fill:var(--ink-2)">PD</text>
+        <text x="62" y="174" font-size="10.5" text-anchor="end" style="fill:var(--muted-ink)">1 kHz</text>
+        <g stroke="var(--d5)" stroke-width=".8">
+          <line x1="70" y1="146" x2="70" y2="166"/><line x1="78" y1="146" x2="78" y2="166"/>
+          <line x1="86" y1="146" x2="86" y2="166"/><line x1="94" y1="146" x2="94" y2="166"/>
+          <line x1="102" y1="146" x2="102" y2="166"/><line x1="110" y1="146" x2="110" y2="166"/>
+          <line x1="118" y1="146" x2="118" y2="166"/><line x1="126" y1="146" x2="126" y2="166"/>
+          <line x1="134" y1="146" x2="134" y2="166"/><line x1="142" y1="146" x2="142" y2="166"/>
+          <line x1="150" y1="146" x2="150" y2="166"/><line x1="158" y1="146" x2="158" y2="166"/>
+          <line x1="166" y1="146" x2="166" y2="166"/><line x1="174" y1="146" x2="174" y2="166"/>
+          <line x1="182" y1="146" x2="182" y2="166"/><line x1="190" y1="146" x2="190" y2="166"/>
+          <line x1="198" y1="146" x2="198" y2="166"/><line x1="206" y1="146" x2="206" y2="166"/>
+          <line x1="214" y1="146" x2="214" y2="166"/><line x1="222" y1="146" x2="222" y2="166"/>
+          <line x1="230" y1="146" x2="230" y2="166"/><line x1="238" y1="146" x2="238" y2="166"/>
+          <line x1="246" y1="146" x2="246" y2="166"/><line x1="254" y1="146" x2="254" y2="166"/>
+          <line x1="262" y1="146" x2="262" y2="166"/><line x1="270" y1="146" x2="270" y2="166"/>
+          <line x1="278" y1="146" x2="278" y2="166"/><line x1="286" y1="146" x2="286" y2="166"/>
+          <line x1="294" y1="146" x2="294" y2="166"/><line x1="302" y1="146" x2="302" y2="166"/>
+          <line x1="310" y1="146" x2="310" y2="166"/><line x1="318" y1="146" x2="318" y2="166"/>
+          <line x1="326" y1="146" x2="326" y2="166"/><line x1="334" y1="146" x2="334" y2="166"/>
+          <line x1="342" y1="146" x2="342" y2="166"/><line x1="350" y1="146" x2="350" y2="166"/>
+          <line x1="358" y1="146" x2="358" y2="166"/><line x1="366" y1="146" x2="366" y2="166"/>
+          <line x1="374" y1="146" x2="374" y2="166"/><line x1="382" y1="146" x2="382" y2="166"/>
+          <line x1="390" y1="146" x2="390" y2="166"/><line x1="398" y1="146" x2="398" y2="166"/>
+          <line x1="406" y1="146" x2="406" y2="166"/><line x1="414" y1="146" x2="414" y2="166"/>
+          <line x1="422" y1="146" x2="422" y2="166"/><line x1="430" y1="146" x2="430" y2="166"/>
+          <line x1="438" y1="146" x2="438" y2="166"/><line x1="446" y1="146" x2="446" y2="166"/>
+          <line x1="454" y1="146" x2="454" y2="166"/><line x1="462" y1="146" x2="462" y2="166"/>
+          <line x1="470" y1="146" x2="470" y2="166"/><line x1="478" y1="146" x2="478" y2="166"/>
+          <line x1="486" y1="146" x2="486" y2="166"/><line x1="494" y1="146" x2="494" y2="166"/>
+          <line x1="502" y1="146" x2="502" y2="166"/><line x1="510" y1="146" x2="510" y2="166"/>
+          <line x1="518" y1="146" x2="518" y2="166"/><line x1="526" y1="146" x2="526" y2="166"/>
+          <line x1="534" y1="146" x2="534" y2="166"/><line x1="542" y1="146" x2="542" y2="166"/>
+          <line x1="550" y1="146" x2="550" y2="166"/>
+        </g>
+
+        <line x1="70" y1="184" x2="550" y2="184" stroke="var(--line-2)" stroke-width="1"/>
+        <g class="t-mono" font-size="11.5" style="fill:var(--muted-ink)">
+          <text x="70" y="200" text-anchor="middle">0</text>
+          <text x="150" y="200" text-anchor="middle">10</text>
+          <text x="230" y="200" text-anchor="middle">20</text>
+          <text x="310" y="200" text-anchor="middle">30</text>
+          <text x="390" y="200" text-anchor="middle">40</text>
+          <text x="470" y="200" text-anchor="middle">50</text>
+          <text x="550" y="200" text-anchor="middle">60</text>
+        </g>
+        <text x="550" y="218" font-size="11.5" text-anchor="end" style="fill:var(--ink-2)">时间 / ms</text>
+
+        <g stroke="var(--d4)" stroke-width="1">
+          <line x1="70" y1="118" x2="230" y2="118"/>
+          <line x1="70" y1="113" x2="70" y2="123"/>
+          <line x1="230" y1="113" x2="230" y2="123"/>
+        </g>
+        <text x="150" y="112" font-size="11" text-anchor="middle" style="fill:var(--d4)">Δt = 20 ms</text>
+
+        <g stroke="var(--d2)" stroke-width="1">
+          <line x1="230" y1="138" x2="390" y2="138"/>
+          <line x1="230" y1="133" x2="230" y2="143"/>
+          <line x1="390" y1="133" x2="390" y2="143"/>
+        </g>
+        <text x="310" y="130" font-size="11" text-anchor="middle" style="fill:var(--d2)">20 次 PD 更新</text>
+
+        <text x="70" y="240" font-size="12" style="fill:var(--ink-2)">t 时刻下发的动作，用的是 t−20 ms 的世界；延迟必须进观测，否则策略一直在开环猜。</text>
+        <text x="70" y="262" font-size="12" style="fill:var(--muted-ink)">传感器 400 Hz、策略 50 Hz、PD 1 kHz：每降一层频率，接口就要显式定义一次。</text>
+
+        <defs>
+          <marker id="ch07-fig6-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d4)"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 7.6</span>三层频率的时序：IMU 400 Hz、策略 50 Hz、PD 1 kHz。一个 20 ms 的策略周期里 PD 更新 20 次，而策略看到的是 20 ms 前的世界。
+      <span class="fig-note read-for">读者应看出：策略的频率比 PD 低 20 倍，50 Hz 的阶梯靠 PD 的带宽磨平；延迟不在 PD 里，它在观测与动作之间，必须显式补偿。</span>
+      <span class="fig-src">来源：作者绘制，IMU 400 Hz 为量级估计，20 ms 端到端延迟取 OmniH2O 的实测值。</span>
+    </figcaption>
+  </figure>
+
+  <p>频率分三层：传感器 200–500 Hz，策略 50 Hz（20 ms），关节 PD 1 kHz（1 ms），时序如图 7.6。一个策略周期里 PD 更新 20 次。策略输出的是 12 个目标角，20 次 PD 把它变成 20 组力矩；PD 的带宽（G1 膝 kp=150、kd=4，关节等效惯量 0.05–0.2 kg·m²，闭环带宽 √(kp/J)/2π ≈ 4–9 Hz）把 50 Hz 的阶梯磨成近似连续，代价是等效延迟增加约 5–10 ms。</p>
+
+  <p>动作插值与滤波：直接把 50 Hz 的阶跃丢给 PD，力矩会在每个策略周期跳一次，激励关节的高频模态。工程做法是线性插值到 1 kHz，再叠一个 20–30 Hz 的一阶低通；或者限幅到 5 rad/s。滤波会再引入 5–8 ms 延迟，这笔账要算进总延迟。</p>
+
+  <p>推理：3 层 MLP（512-256-128）单次前向在 Orin 上小于 1 ms，占 20 ms 周期的 5%。导出用 ONNX 或 TorchScript，TensorRT 开 fp16 还能再快 2–3 倍；关键是别在每帧里分配内存——一个 47 维的 vector 构造在 50 Hz 下不算什么，但在 1 kHz 的日志线程里会抖。</p>
+
+  <p>延迟补偿：H1 的端到端延迟约 20 ms，等于一个完整的策略周期。三条工程手段：把上一帧动作放进观测，让策略知道自己刚下发了什么；训练时把观测随机延迟 0–10 ms，与 DR 同一套机制；部署时按实测延迟把观测缓冲对齐。第三条最容易被忽略——不做的话，策略看到的是 20 ms 前的世界，而它以为自己看到的是现在。</p>
+
+  <p>上机顺序不要跳：吊架 → 限幅 30% → 站立 → 0.3 m/s 直行 → 自由行走。每一级的验收指标：站立 60 s 不触发保护，直行 10 m 不摔，自由行走 60 s 力矩峰值不超过标称的 80%。</p>
+
+  <aside class="callout callout--warning" data-reveal>
+    <p class="callout-kicker">警告 <span>Warning</span></p>
+    <p>第一次闭环就跑策略是最常见的烧机方式。G1 的膝标称 90 N·m，一个 20 ms 的错误动作就能让它输出 60 N·m 的反向力矩；先限幅到 30%，把摔倒检测（倾角超过 45° 切阻尼）写好，再谈性能。别用「仿真里能走 60 s」当上机依据。</p>
+  </aside>
+
+  <h2>奖励设计的四个坑</h2>
+
+  <p>这一节解决的问题：识别奖励黑客与训练/部署不一致，这四类问题占了调试时间的大半。先把口径说清：从一段 demo 上，你能看的只有三件事——动作是否高频抖、是否只在某一个速度下有效、换一种地面还稳不稳；至于奖励里有没有「活着就给分」这类漏洞，必须拿到训练配置和奖励分解图才能判断，demo 本身看不出来。</p>
+
+  <p><strong>坑一：奖励黑客（reward hacking）。</strong>策略会找到奖励函数的漏洞，用设计者没想过的方式拿分。ASAP 记录过一个干净的案例：跳跃任务里策略学会贴地不动，因为落地惩罚比跳起来的奖励更贵；最后靠终止阈值课程（1.5 m → 0.3 m）逼它跳。这里 1.5 m → 0.3 m 是回合终止的「动作误差」门槛，不是奖励项，也不是目标高度：机器人和参考动作的偏差一旦超过门槛，本回合就判失败、立刻结束。课程从 1.5 m 起步——这么宽的门槛等于允许它几乎不跟参考，贴地不动也能活；训练中逐步收到 0.3 m，站着不动与跳跃参考的偏差远大于 0.3 m，回合会立刻终止、一分不得，于是「贴地不动」这条捷径被堵死。更常见的是抖腿刷速度（动作变化率权重太小）、单脚跳（没有接触序列约束）、拖脚滑行（足滑权重不足）。信号很明确：奖励分解图里某一项吃掉 80% 的总分。</p>
+
+  <p><strong>坑二：观测归一化不一致。</strong>训练时用 running mean/std，部署时忘了导出，或者换成固定常数。基座角速度的 std 在训练里是 0.5，部署时按 1.0 归一化，输入就小了一半，策略等价于被蒙住一只眼。归一化的均值、方差、clip 范围必须跟权重一起导出，最好打包进同一个 ONNX 文件。</p>
+
+  <p><strong>坑三：训练分布与实机不符。</strong>训练命令 0–1.5 m/s，用户一上来给 2.5 m/s；训练全平地，实机第一块地毯就绊；训练负载 0，实机背了 3 kg 的电池包。这一类不需要改算法，只需要把实机工况写进训练配置，或者在部署时把命令范围截断。</p>
+
+  <p><strong>坑四：只看平均回报。</strong>平均回报会把失败模式平均掉。90% 的回合跑满 20 s、10% 立刻摔，平均回报可能高于 100% 回合跑 10 s。评估至少要看四个数：存活率、最差 10% 的回报、力矩 p99、分地形的摔倒率。20 个回合的成功率 0.8，95% 置信区间约 ±0.18——样本太少时，两次实验的差别可能只是运气。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 7.4 四类奖励问题的症状与修法</caption>
+      <thead>
+        <tr><th>症状</th><th>病因</th><th>修法</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>原地抖腿，速度上不去</td><td>动作变化率权重太小</td><td>−0.01 → −0.05，加动作二阶差分</td></tr>
+        <tr><td>贴地不动，拒绝跳</td><td>落地惩罚贵过跳跃奖励</td><td>终止阈值课程：动作误差门槛 1.5 m → 0.3 m</td></tr>
+        <tr><td>仿真里走，真机第一步就软</td><td>观测归一化没导出</td><td>归一化参数与权重打包进 ONNX</td></tr>
+        <tr><td>直行稳，转弯就摔</td><td>训练命令里角速度为 0</td><td>命令范围加 ±0.8 rad/s，DR 同步</td></tr>
+        <tr><td>平均回报高但事故多</td><td>只看均值，没看尾部</td><td>报存活率、最差 10%、力矩 p99</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <section class="demo" data-demo="reward" aria-labelledby="demo71-title">
+    <div class="demo-bar">
+      <span class="demo-live"><i aria-hidden="true"></i>Live</span>
+      <h4 class="demo-title" id="demo71-title">奖励塑形：三个权重把跳跃推成三种样子</h4>
+      <span class="demo-tag">Demo 7.1</span>
+    </div>
+
+    <div class="demo-stage">
+      <canvas id="demo71-canvas" width="640" height="260" role="img" aria-label="一维弹簧腿跳跃的实时高度曲线：横轴最近 10 秒，纵轴高度 0 到 1.4 米，叠加目标高度与期望高度两条虚线，右侧是跳跃机构的示意">一维弹簧腿跳跃的高度—时间曲线，滑块改变目标高度、能耗权重与平滑权重，曲线、峰值力与奖励分项随之变化。</canvas>
+    </div>
+
+    <div class="demo-controls">
+      <div class="demo-ctl">
+        <label for="demo71-h">目标高度 h*</label>
+        <input id="demo71-h" type="range" min="0.80" max="1.20" step="0.01" value="0.95">
+        <output class="demo-out" for="demo71-h" id="demo71-h-out">0.95</output>
+      </div>
+      <div class="demo-ctl">
+        <label for="demo71-we">能耗权重 w_e</label>
+        <input id="demo71-we" type="range" min="0" max="1" step="0.01" value="0.15">
+        <output class="demo-out" for="demo71-we" id="demo71-we-out">0.15</output>
+      </div>
+      <div class="demo-ctl">
+        <label for="demo71-ws">平滑权重 w_s</label>
+        <input id="demo71-ws" type="range" min="0" max="2" step="0.05" value="0.3">
+        <output class="demo-out" for="demo71-ws" id="demo71-ws-out">0.30</output>
+      </div>
+    </div>
+
+    <dl class="demo-readout">
+      <div><dt>顶点高度</dt><dd><span data-readout="apex">—</span><small>m</small></dd></div>
+      <div><dt>峰值力</dt><dd><span data-readout="peak">—</span><small>N</small></dd></div>
+      <div><dt>单跳能耗</dt><dd><span data-readout="work">—</span><small>J</small></dd></div>
+      <div><dt>10 s 平均奖励</dt><dd><span data-readout="reward">—</span><small>无量纲</small></dd></div>
+    </dl>
+
+    <div class="reward-split" aria-label="最近一跳的奖励分项">
+      <p class="rw-kicker">最近一跳的奖励分项 <span>reward decomposition</span></p>
+      <div class="rw-row">
+        <span class="rw-name">高度项</span>
+        <span class="rw-track" aria-hidden="true"><i class="rw-zero"></i><i class="rw-bar" data-rw="h"></i></span>
+        <span class="rw-val" data-rwv="h">+0.00</span>
+      </div>
+      <div class="rw-row">
+        <span class="rw-name">能耗项</span>
+        <span class="rw-track" aria-hidden="true"><i class="rw-zero"></i><i class="rw-bar" data-rw="e"></i></span>
+        <span class="rw-val" data-rwv="e">+0.00</span>
+      </div>
+      <div class="rw-row">
+        <span class="rw-name">jerk 项</span>
+        <span class="rw-track" aria-hidden="true"><i class="rw-zero"></i><i class="rw-bar" data-rw="s"></i></span>
+        <span class="rw-val" data-rwv="s">+0.00</span>
+      </div>
+      <div class="rw-total"><span>合计 R</span><span data-rwv="total">+0.00</span></div>
+    </div>
+
+    <p class="demo-status" id="demo71-status" role="status" aria-live="polite">拖动滑块，观察 h_des 与实测顶点的差别。</p>
+  </section>
+
+  <p class="small">真实 RL 的策略是学出来的；这里是理解 reward 塑形的沙盒，控制器是解析的。物理是一维质点加线性弹簧腿（m = 1 kg，ℓ₀ = 0.65 m，k = 60 N/m，c = 1 N·s/m，子步 1 ms），不含关节、姿态与真实接触切换，峰值力与能耗只能作量级参考。控制器按 h_des = h*/(1+0.8·w_e) 折中，再对「当前机械能折算的预测顶点」做 PD 跟踪：P 项是高度误差，微分作用由速度平方进入预测顶点——速度越大，预测顶点越高，推力收得越早。另带 0.09 m 的标定偏置，补偿阻尼与有限行程；w_s 只进奖励、不改控制器——这正是奖励与控制器分离时的样子。总分只在同一组权重下可比：改了权重，奖励函数本身就变了。</p>
+
+  <h2>六个真实系统的取舍</h2>
+
+  <p>这一节解决的问题：六个真实系统的切法不同，看懂取舍就知道它们的失效模式。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 7.5 六个系统的关键选择与代价</caption>
+      <thead>
+        <tr><th>系统</th><th>关键选择</th><th>为什么这样选</th><th>代价</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>ANYmal / legged_gym</td><td>4096 并行 + 地形课程 + 特权高度图</td><td>4096 路并行把「训一个策略」压到 20 分钟</td><td>依赖高程图质量，高度图错 5 cm 落脚点就错</td></tr>
+        <tr><td>Humanoid-Gym</td><td>100 Hz 策略 + 1000 Hz PD + 宽 DR + MuJoCo 复核</td><td>人形 gap 比四足大，用高频与宽随机化换零样本</td><td>步态偏保守，DR 区间靠手调</td></tr>
+        <tr><td>RMA</td><td>教师特权 e<sub>t</sub> → 隐变量 ẑ，10 Hz 自适应 + 100 Hz 策略</td><td>A1 算力低，把慢变量与快变量解耦</td><td>两阶段训练，特权标签只在仿真里</td></tr>
+        <tr><td>OmniH2O</td><td>50 Hz 直接输出关节力矩，双 Orin NX 分工</td><td>遥操作对延迟敏感，端到端压到 20 ms</td><td>没有独立 WBC，抗扰全靠策略</td></tr>
+        <tr><td>ASAP</td><td>真机 rollout 学 delta action model，再冻结微调</td><td>系统辨识拟合不了接触与延迟，残差直接学「差在哪」</td><td>必须上真机采数，换机器人要重来</td></tr>
+        <tr><td>Unitree G1 / unitree_rl_gym</td><td>50 Hz 策略 + 12 个腿部关节 + 摩擦 0.1–1.25 + MuJoCo 复核</td><td>35 kg、膝 90 N·m 的硬件只够慢走，先把稳定做到位</td><td>速度上限低，复杂地形能力弱</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>ANYmal 的失效模式是「看不见的地方」：高度图错 5 cm，落脚点就错 5 cm，脚会踩到台阶边缘。Humanoid-Gym 的失效模式是「太保守」：宽 DR 下步幅短、屈膝多，跑不快。ASAP 的失效模式是「换机重来」：delta action model 绑在那一台机器人的接触特性上，换一条腿就要重采。</p>
+
+  <p>OmniH2O 的失效模式是「没有兜底」：策略直接输出力矩，没有 WBC 层做接触力分配，被人推一把之后能不能站住完全看策略训过多少扰动。Unitree G1 的失效模式是「上限低」：35 kg、膝 90 N·m 的硬件与 50 Hz 的策略组合只够慢走，命令超过 1.5 m/s 跟踪就会掉，复杂地形上不如 ANYmal 那一套。</p>
+
+  <p>把这些放在一起看，两条主线很清楚：「把仿真做准」（系统辨识、执行器网络、ASAP 的残差模型）与「把策略做鲁棒」（DR、课程、蒸馏）。预算有限时先做鲁棒，再补辨识——因为鲁棒能容忍的误差，比辨识能消掉的误差大一个量级。</p>
+
+  <section class="takeaways" data-takeaways aria-labelledby="ch07-takeaways">
+    <p class="kicker" id="ch07-takeaways">本章要点 <span>Takeaways</span></p>
+    <ol>
+      <li><strong>RL 换的是问题的写法，不是免费的性能。</strong>47 维观测、10–20 项奖励、1.5×10⁸ 样本，任何一项错都直接摔；它买到的是对模型误差的容忍，不是更高的精度。</li>
+      <li><strong>PPO 的三个旋钮有物理含义。</strong>ε=0.2 是每步最多 20% 的概率比变化，λ=0.95、γ=0.99 让策略只看 0.34 s 的直接后果，熵 0.01 是买探索的钱。</li>
+      <li><strong>DR 的目标是覆盖真机分布，不是越宽越好。</strong>摩擦 0.1–1.25 对室内够用；开到 0.1–2.0 换来的是保守步态与 10–20% 的速度损失。</li>
+      <li><strong>sim2real 的瓶颈常是观测而不是仿真精度。</strong>actor 里每一维都必须是真机拿得到的；教师-学生就是把特权信息在训练时用掉、部署时扔掉。</li>
+    </ol>
+  </section>
+
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[01]</span>
+      <div>
+        <p class="paper-title">Proximal Policy Optimization Algorithms</p>
+        <p class="paper-meta">Schulman, Wolski, Dhariwal, Radford, Klimov · arXiv, 2017 · 用裁剪比率把「别更新太猛」变成一阶目标，腿足 RL 的默认算法</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1707.06347">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[02]</span>
+      <div>
+        <p class="paper-title">High-Dimensional Continuous Control Using Generalized Advantage Estimation</p>
+        <p class="paper-meta">Schulman, Moritz, Levine, Jordan, Abbeel · ICLR, 2016 · 用 (γλ)<sup>l</sup> 加权叠 TD 残差，一个 λ 调偏差与方差</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1506.02438">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[03]</span>
+      <div>
+        <p class="paper-title">Isaac Gym: High Performance GPU-Based Physics Simulation For Robot Learning</p>
+        <p class="paper-meta">Makoviychuk 等 · NVIDIA 技术报告, 2021 · 物理与策略同卡，2–3 个数量级加速，奠定万级并行范式</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2108.10470">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[04]</span>
+      <div>
+        <p class="paper-title">Learning to Walk in Minutes Using Massively Parallel Deep Reinforcement Learning</p>
+        <p class="paper-meta">Rudin, Hoeller, Reist, Hutter · CoRL, 2021 · 4096 机器人 + 地形课程，ANYmal 崎岖地形 20 分钟，开源 legged_gym</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2109.11978">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[05]</span>
+      <div>
+        <p class="paper-title">RMA: Rapid Motor Adaptation for Legged Robots</p>
+        <p class="paper-meta">Kumar, Fu, Pathak, Malik · RSS, 2021 · 特权信息压成隐变量，50 步历史回归，10 Hz 自适应 + 100 Hz 策略</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2107.04034">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[06]</span>
+      <div>
+        <p class="paper-title">Humanoid-Gym: Reinforcement Learning for Humanoid Robot with Zero-Shot Sim2Real Transfer</p>
+        <p class="paper-meta">Gu 等 · arXiv, 2024 · 人形零样本迁移的最小实现，含 Isaac→MuJoCo 的 sim2sim 闸门</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2404.05695">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[07]</span>
+      <div>
+        <p class="paper-title">ASAP: Aligning Simulation and Real-World Physics for Learning Agile Humanoid Whole-Body Skills</p>
+        <p class="paper-meta">He 等 · arXiv, 2025 · 用真机 rollout 学 delta action model，MPJPE 126 mm；终止阈值课程是奖励设计的样本</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2502.01143">arXiv ↗</a>
+    </li>
+  </ol>
+
+  <p>延伸阅读：AMP <a href="https://arxiv.org/abs/2104.02180">arXiv ↗</a> 与 DeepMimic <a href="https://arxiv.org/abs/1804.02717">arXiv ↗</a> 是运动模仿的两条路线；OmniH2O <a href="https://arxiv.org/abs/2406.08858">arXiv ↗</a> 展示 50 Hz 力矩策略的遥操作；legged_gym <a href="https://github.com/leggedrobotics/legged_gym">GitHub ↗</a> 是最小完整闭环，代码量小到能通读。</p>
+
+  <a class="next-chapter" href="#ch-08">
+    <span class="next-kicker">下一章 · Next</span>
+    <span class="next-title">08｜感知、状态估计与操作：机器人的眼睛和手</span>
+    <span class="next-arrow" aria-hidden="true">→</span>
+  </a>
+
+  <style>
+    #ch-07 .demo-stage canvas { display: block; width: 100%; height: 260px; }
+    #ch-07 .demo-ctl { display: flex; flex: 1 1 300px; align-items: center; gap: 8px; min-width: 0; }
+    #ch-07 .demo-ctl label { flex: 0 0 auto; }
+    #ch-07 .demo-ctl input[type="range"] { flex: 1 1 60px; min-width: 60px; }
+    #ch-07 .demo-status { margin: 0; padding: 10px 16px 12px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; line-height: 1.7; letter-spacing: .02em; color: var(--muted-ink); }
+    #ch-07 .reward-split { padding: 12px 16px 14px; border-top: 1px solid var(--line); }
+    #ch-07 .rw-kicker { margin: 0 0 8px; font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent-2-ink); }
+    #ch-07 .rw-kicker span { margin-left: 6px; letter-spacing: .1em; color: var(--muted-ink); }
+    #ch-07 .rw-row { display: grid; grid-template-columns: 64px 1fr 52px; align-items: center; gap: 10px; margin: 5px 0; }
+    #ch-07 .rw-name { font-family: var(--mono); font-size: 11px; color: var(--muted-ink); }
+    #ch-07 .rw-track { position: relative; display: block; height: 10px; background: var(--paper-2); border: 1px solid var(--line); }
+    #ch-07 .rw-zero { position: absolute; left: 60%; top: -2px; bottom: -2px; width: 1px; background: var(--line-2); }
+    #ch-07 .rw-bar { position: absolute; top: 1px; height: 6px; }
+    #ch-07 .rw-bar.is-pos { background: var(--d1); }
+    #ch-07 .rw-bar.is-neg { background: var(--signal); }
+    #ch-07 .rw-val { font-family: var(--mono); font-size: 11px; text-align: right; color: var(--ink-2); }
+    #ch-07 .table-wrap td:first-child, #ch-07 .table-wrap th:first-child { white-space: nowrap; }
+    #ch-07 .demo-tag { white-space: nowrap; }
+    #ch-07 .rw-total { display: flex; justify-content: space-between; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; letter-spacing: .04em; color: var(--ink-2); }
+    @media (max-width: 767px) {
+      #ch-07 .demo-stage canvas { height: 220px; }
+      #ch-07 .demo-ctl { flex-basis: 100%; }
+    }
+    @media (max-width: 560px) {
+      #ch-07 .demo-readout { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #ch-07 .demo-readout > div:nth-child(3) { border-left: 0; }
+    }
+  </style>
+</section>

@@ -1,0 +1,636 @@
+<section class="chapter" id="ch-08" data-chapter="08">
+  <header class="chapter-head">
+    <div class="ch-meta">
+      <span class="ch-num" aria-hidden="true">08</span>
+      <p class="kicker">Perception &amp; Manipulation</p>
+    </div>
+    <h2><span class="ch-h1-a"><span class="ch-h1-a1">感知、</span><span class="ch-h1-a2">状态估计与操作：</span></span><span class="ch-h1-b">机器人的眼睛和手</span></h2>
+    <p class="lede">前七章都建立在一个默认前提上：你知道自己在哪、脚有没有踩实、手该用多大的力。仿真里这三件事由物理引擎免费提供，真机上没有。这一章把它们补上，把开环的控制链闭合成环。</p>
+  </header>
+
+  <p>05 章的全身控制假设你手上有一组数：关节角、躯干姿态、脚在接触面上的位置。07 章的策略在仿真里学会了走，可它看到的机身速度、地形高度都是引擎直接喂的。真机上没有这种视角。60 kg 的机器人，姿态估计偏 1°，重力补偿的方向就偏 1°，等于给整机灌进 0.17 m/s² 的假水平加速度——比一个标定良好的加速度计零偏大 17 倍，2 s 就能让它凭空走出 0.3 m。</p>
+
+  <h2>一个 1 mg 的零偏，十秒半米</h2>
+  <p>这一节解决什么问题：算清「把 IMU 读数积分两次」为什么在十秒内就不可用，以及误差是怎么从一个常数长成一条抛物线的。</p>
+
+  <p>加速度计测的是比力（specific force）：静止放在桌上，它读 9.81 m/s² 而不是 0。扣掉重力之后，剩下的零点误差叫零偏（bias）。零偏不随运动变化，只随温度缓慢爬。误差的传播因此变成两次积分——速度误差是 b·t，位置误差是 ½b·t²。</p>
+
+  <div class="formula-block">
+    <span class="formula">Δv(t) = b t,　Δp(t) = ½ b t<sup>2</sup></span>
+    <span class="formula-no">8.1</span>
+  </div>
+
+  <p>代入数字。b = 0.01 m/s²，也就是 1 mg，大约是消费级 IMU 标定后的残余零偏：10 s 后速度错 0.1 m/s、位置错 0.5 m；30 s 后 4.5 m；60 s 后 18 m。这条曲线不是「精度差一点」，是「完全不可用」——一台 1.3 m 高的机器人走出 18 m，早就撞上墙了。注意量纲：这是一次积分与二次积分的差别，速度线性增长，位置抛物线增长，所以时间越长，误差涨得越不成比例。图 8.1 把三种增长放在同一张坐标里。</p>
+
+  <p>陀螺更麻烦，因为姿态误差会反过来污染加速度。BMI088 这类 MEMS 陀螺的出厂零偏是 ±1 °/s，零偏温漂 0.015 °/s/K；板子开机后升 10 °C，零偏就漂 0.15 °/s。1 °/s 积分 60 s 是 60°，而 1° 的姿态误差在 60 kg 上就是 10 N 的水平力误差。姿态错，重力投影就错；重力投影错，水平加速度就错，再往后是速度和位置。这条回路本身没有负反馈，只能靠外部观测把它打断。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 360" role="img" aria-labelledby="ch08-fig1-title ch08-fig1-desc">
+      <title id="ch08-fig1-title">三条支路的位置误差随时间的增长</title>
+      <desc id="ch08-fig1-desc">横轴为时间 0 到 60 秒，纵轴为位置误差 0 到 3 米。纯 IMU 积分在 0.01 米每二次方秒零偏下 24.4 秒就超出 3 米；纯腿里程计按行程 1.5% 线性增长，60 秒到 0.9 米；加视觉回环后误差压在 2 厘米。</desc>
+      <line x1="72" y1="44" x2="72" y2="300" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="72" y1="300" x2="566" y2="300" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="72" y1="214.7" x2="566" y2="214.7" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <line x1="72" y1="129.3" x2="566" y2="129.3" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <line x1="72" y1="44" x2="566" y2="44" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <text x="64" y="304" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">0</text>
+      <text x="64" y="218.7" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">1</text>
+      <text x="64" y="133.3" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">2</text>
+      <text x="64" y="48" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">3</text>
+      <text x="154.3" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">10</text>
+      <text x="236.7" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">20</text>
+      <text x="319" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">30</text>
+      <text x="401.3" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">40</text>
+      <text x="483.7" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">50</text>
+      <text x="566" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">60</text>
+      <polyline points="72.0,300.0 76.1,299.9 80.2,299.6 84.3,299.0 88.5,298.3 92.6,297.3 96.7,296.2 100.8,294.8 104.9,293.2 109.0,291.4 113.2,289.3 117.3,287.1 121.4,284.6 125.5,282.0 129.6,279.1 133.8,276.0 137.9,272.7 142.0,269.2 146.1,265.4 150.2,261.5 154.3,257.3 158.4,253.0 162.6,248.4 166.7,243.6 170.8,238.6 174.9,233.3 179.0,227.9 183.2,222.2 187.3,216.4 191.4,210.3 195.5,204.0 199.6,197.5 203.7,190.8 207.9,183.8 212.0,176.7 216.1,169.3 220.2,161.8 224.3,154.0 228.4,146.0 232.6,137.8 236.7,129.3 240.8,120.7 244.9,111.8 249.0,102.8 253.1,93.5 257.2,84.0 261.4,74.3 265.5,64.4 269.6,54.2" style="fill:none;stroke:var(--d2);stroke-width:1.8"/>
+      <polyline points="72.0,300.0 154.3,287.2 236.7,274.4 319.0,261.6 401.3,248.8 483.7,236.0 566.0,223.2" style="fill:none;stroke:var(--d3);stroke-width:1.8"/>
+      <polyline points="72.0,298.3 88.5,297.9 104.9,298.9 121.4,299.0 137.9,297.6 154.3,297.7 170.8,298.7 187.3,298.2 203.7,297.9 220.2,299.0 236.7,299.0 253.1,297.6 269.6,297.7 286.1,298.7 302.5,298.2 319.0,297.9 335.5,299.0 351.9,299.0 368.4,297.7 384.9,297.8 401.3,298.7 417.8,298.1 434.3,297.8 450.7,299.0 467.2,299.0 483.7,297.7 500.1,297.8 516.6,298.6 533.1,298.1 549.5,297.8 566.0,299.0" style="fill:none;stroke:var(--d1);stroke-width:1.8"/>
+      <line x1="276" y1="54" x2="300" y2="40" style="stroke:var(--d2);stroke-width:.8"/>
+      <text x="304" y="36" class="t-label" style="font-size:12px;fill:var(--accent-2-ink);">24.4 s 出图（3 m）</text>
+      <text x="470" y="214" class="t-label" style="font-size:12px;fill:var(--d3);">60 s 0.9 m</text>
+      <text x="72" y="26" class="t-label" style="font-size:12px;fill:var(--ink);">位置误差 / m</text>
+      <text x="566" y="26" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">时间 / s</text>
+      <line x1="72" y1="338" x2="94" y2="338" style="stroke:var(--d2);stroke-width:1.8"/>
+      <text x="100" y="342" class="t-label" style="font-size:11px;fill:var(--muted-ink);">纯 IMU（b = 0.01 m/s²）</text>
+      <line x1="268" y1="338" x2="290" y2="338" style="stroke:var(--d3);stroke-width:1.8"/>
+      <text x="296" y="342" class="t-label" style="font-size:11px;fill:var(--muted-ink);">IMU + 腿里程计（1.5%）</text>
+      <line x1="470" y1="338" x2="492" y2="338" style="stroke:var(--d1);stroke-width:1.8"/>
+      <text x="498" y="342" class="t-label" style="font-size:11px;fill:var(--muted-ink);">再加视觉</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 8.1</span>三条支路的位置误差：纯 IMU 二次发散，腿里程计按行程比例线性增长，加入视觉回环后压在 2 cm 量级。
+      <span class="fig-note read-for">读者应看出：误差的量级由「最长的那条时间常数」决定——同样 60 s，纯积分会到 18 m，腿里程计只有 0.9 m，差 20 倍；视觉修正把误差曲线压成一条平线，但它有 20 ms 延迟，不能单独拿来闭环。</span>
+      <span class="fig-src">来源：作者绘制，按 ½bt² 与行程 1.5% 计算，视觉段为示意。</span>
+    </figcaption>
+  </figure>
+
+  <h2>三个来源，三种错法</h2>
+  <p>这一节解决什么问题：给每个传感器定一个位置——它擅长哪个频段、错在哪个方向——因为融合的本质是分工，不是投票。</p>
+
+  <p>惯性测量单元（Inertial Measurement Unit, IMU）是唯一能在 1 ms 内给出新信息的传感器：采样 200–1000 Hz，延迟小于 1 ms，0.1 s 内的角度和加速度都很准。它的错误集中在低频：零偏、温漂，以及积分带来的二次增长。换句话说，它知道「刚才发生了什么」，不知道「现在到底在哪」。</p>
+
+  <p>腿部里程计（leg odometry）用编码器和正运动学反推机体速度。逻辑是一条假设：支撑脚在世界系里不动，所以机体速度等于脚相对机体速度的反号，位置由髋到脚的向量与腿部雅可比算出。它每秒更新 50–500 次，误差是行程的 1–3%——走 10 m 差 10–30 cm。这个误差按里程长，不按时间平方长，而且完全没有零偏。它的死穴就是那条假设：脚打滑、腾空、踩在软地毯上，假设立刻不成立。</p>
+
+  <p>视觉惯性里程计（Visual-Inertial Odometry, VIO）给的是绝对量：看到的东西有纹理、有结构，可以认出「我来过这里」，所以误差不随时间累积。代价是延迟：相机 10–30 Hz 出图，VIO 输出可以插值到 200–400 Hz，但端到端延迟 10–30 ms，加上传输与特征提取，你拿到的常常是 40 ms 以前的世界。无纹理白墙、逆光、快速转动造成的运动模糊，会让它整段失效。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 8.1 三条信息源的账本：频率、延迟、误差形态与失效条件</caption>
+      <thead>
+        <tr><th>来源</th><th class="num">更新率 / 延迟</th><th>误差随时间</th><th class="num">典型量级</th><th>失效条件</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>IMU</td><td class="num">200–1000 Hz / &lt; 1 ms</td><td>∝ t²（零偏）</td><td class="num">10 s 0.5 m</td><td>温漂、饱和、振动</td></tr>
+        <tr><td>腿里程计</td><td class="num">50–500 Hz / 5–20 ms</td><td>∝ 行程</td><td class="num">行程的 1–3%</td><td>打滑、腾空、软地面</td></tr>
+        <tr><td>视觉 / VIO</td><td class="num">10–30 Hz / 10–30 ms</td><td>无回环时缓慢累积</td><td class="num">行程的 0.5–2%</td><td>光照、无纹理、模糊</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>三者的错误在频域上是互补的：IMU 高频好、低频烂，里程计低频好、高频抖，视觉长期好、短期慢。融合要做的就是把它们各自的强项拼起来——但拼接之前，得先把高频那条路的积分算对。图 8.2 画出这三条支路进入融合器时的频率与延迟。</p>
+
+  <p>预积分（preintegration）就是干这件事的。两帧相机之间（30 Hz 就是 33 ms）有 13 个 IMU 采样；优化时相机位姿每变一次，如果从头重算这 13 次积分，代价随采样率线性涨；窗口里放 100 帧，就是 1300 次。预积分把这段积分提前压成一个增量与它的协方差，位姿变化时只做一次一阶修正，代价与采样率无关。式 8.2 前先把符号说清：ω̃ 与 ã 是陀螺和加速度计在采样点 k 的读数，b<sub>g</sub> 与 b<sub>a</sub> 是两者的零偏，Δt 是一个 IMU 周期；Exp 把三维旋转向量变成旋转矩阵，Π 与 Σ 分别是对采样点 k 的连乘与连加。三式从左到右分别积出两帧之间的旋转增量 ΔR̃、速度增量 Δṽ、位置增量 Δp̃，波浪号表示这是还没修正零偏的预积分量。</p>
+
+  <div class="formula-block is-stacked">
+    <span class="formula"><span class="fx-line">ΔR̃<sub>ij</sub> = Π<sub>k</sub> Exp((ω̃<sub>k</sub> − b<sub>g</sub>) Δt)</span><span class="fx-line">Δṽ<sub>ij</sub> = Σ<sub>k</sub> ΔR̃<sub>ik</sub>(ã<sub>k</sub> − b<sub>a</sub>) Δt</span><span class="fx-line">Δp̃<sub>ij</sub> = Σ<sub>k</sub> [Δṽ<sub>ik</sub> Δt + ½ ΔR̃<sub>ik</sub>(ã<sub>k</sub> − b<sub>a</sub>) Δt<sup>2</sup>]</span></span>
+    <span class="formula-no">8.2</span>
+  </div>
+
+  <aside class="callout callout--warning" data-reveal>
+    <p class="callout-kicker">警告 <span>Warning</span></p>
+    <p>预积分消掉的是重复积分，不是零偏漂移。它把「每帧重算 13 次积分」变成「一次增量加线性修正」，省的是算力；零偏仍在随机游走，出厂 ±1 °/s 不建模的话，1 s 就偏 1°。把预积分当成「消除漂移」的手段，是这一章最常见的一处误解——零偏必须进状态，由视觉或腿部里程计去观测它。</p>
+  </aside>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 300" role="img" aria-labelledby="ch08-fig2-title ch08-fig2-desc">
+      <title id="ch08-fig2-title">状态估计的数据流与各级频率</title>
+      <desc id="ch08-fig2-desc">三列结构：左列是 IMU 400 赫兹、编码器 1 千赫兹、相机 30 赫兹；中列是预积分、腿里程计、视觉惯性里程计；右列是融合器，以 1 千赫兹输出位置、速度、姿态与零偏给全身控制。</desc>
+      <defs>
+        <marker id="ch08-fig2-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--line-2)"/>
+        </marker>
+      </defs>
+      <rect x="14" y="26" width="104" height="48" style="fill:none;stroke:var(--line-2);stroke-width:1.2"/>
+      <text x="66" y="46" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--ink);">IMU</text>
+      <text x="66" y="64" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">400 Hz</text>
+      <rect x="14" y="104" width="104" height="48" style="fill:none;stroke:var(--line-2);stroke-width:1.2"/>
+      <text x="66" y="124" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--ink);">关节编码器</text>
+      <text x="66" y="142" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">1 kHz</text>
+      <rect x="14" y="182" width="104" height="48" style="fill:none;stroke:var(--line-2);stroke-width:1.2"/>
+      <text x="66" y="202" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--ink);">相机 / 激光</text>
+      <text x="66" y="220" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">10–30 Hz</text>
+      <rect x="148" y="26" width="112" height="48" style="fill:none;stroke:var(--line-2);stroke-width:1.2"/>
+      <text x="204" y="46" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--ink);">预积分</text>
+      <text x="204" y="64" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">ΔR̃ Δṽ Δp̃</text>
+      <rect x="148" y="104" width="112" height="48" style="fill:none;stroke:var(--line-2);stroke-width:1.2"/>
+      <text x="204" y="124" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--ink);">腿里程计</text>
+      <text x="204" y="142" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">50–500 Hz</text>
+      <rect x="148" y="182" width="112" height="48" style="fill:none;stroke:var(--line-2);stroke-width:1.2"/>
+      <text x="204" y="202" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--ink);">VIO / LIO</text>
+      <text x="204" y="220" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">200–400 Hz</text>
+      <rect x="292" y="26" width="120" height="204" style="fill:none;stroke:var(--d1);stroke-width:1.4"/>
+      <text x="352" y="92" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--ink);">融合器</text>
+      <text x="352" y="112" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">EKF / 因子图</text>
+      <text x="352" y="132" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">预测 + 更新</text>
+      <text x="352" y="160" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--accent);">1 kHz 出</text>
+      <text x="352" y="180" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">延迟 1–3 ms</text>
+      <rect x="448" y="92" width="136" height="72" style="fill:none;stroke:var(--line-2);stroke-width:1.2"/>
+      <text x="516" y="112" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--ink);">状态估计</text>
+      <text x="516" y="130" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">p, v, R, b</text>
+      <text x="516" y="150" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">交给 WBC，1 kHz</text>
+      <line x1="118" y1="50" x2="144" y2="50" style="stroke:var(--line-2);stroke-width:1" marker-end="url(#ch08-fig2-arrow)"/>
+      <line x1="260" y1="50" x2="288" y2="50" style="stroke:var(--line-2);stroke-width:1" marker-end="url(#ch08-fig2-arrow)"/>
+      <line x1="118" y1="128" x2="144" y2="128" style="stroke:var(--line-2);stroke-width:1" marker-end="url(#ch08-fig2-arrow)"/>
+      <line x1="260" y1="128" x2="288" y2="128" style="stroke:var(--line-2);stroke-width:1" marker-end="url(#ch08-fig2-arrow)"/>
+      <line x1="118" y1="206" x2="144" y2="206" style="stroke:var(--line-2);stroke-width:1" marker-end="url(#ch08-fig2-arrow)"/>
+      <line x1="260" y1="206" x2="288" y2="206" style="stroke:var(--line-2);stroke-width:1" marker-end="url(#ch08-fig2-arrow)"/>
+      <line x1="412" y1="128" x2="444" y2="128" style="stroke:var(--d1);stroke-width:1.2" marker-end="url(#ch08-fig2-arrow)"/>
+      <text x="204" y="254" class="t-label" text-anchor="middle" style="font-size:11px;fill:var(--accent-2-ink);">第三行带 20 ms 延迟：先对齐再融合</text>
+      <text x="516" y="186" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">频率高进、频率低出</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 8.2</span>状态估计的数据流：三条传感器支路以 400 Hz、1 kHz、30 Hz 进入，融合器以 1 kHz 输出状态给全身控制。
+      <span class="fig-note read-for">读者应看出：进入融合器的三条支路，更新率从 30 Hz 到 1 kHz、延迟从 1 ms 到 30 ms，都差 30 倍以上，所以融合器内部必须有两套时间——快的用于预测，慢的必须先插值对齐到快的时刻，再当观测用。</span>
+      <span class="fig-src">来源：作者绘制，频率取公开系统与器件手册的量级。</span>
+    </figcaption>
+  </figure>
+
+  <h2>融合：预测与更新的两拍</h2>
+  <p>这一节解决什么问题：把两个都不准的数合成一个更准的数，并且同时知道「这个数有多准」——因为下一层控制要用这个「多准」来决定出多大力。</p>
+
+  <p>扩展卡尔曼滤波（Extended Kalman Filter, EKF）把估计拆成两拍。预测拍：用 IMU 把上一时刻的状态推到这一时刻，协方差同时变大——因为推的过程有噪声，你变得更不确定。更新拍：来一个观测，按「谁更准就更信谁」的比例把预测拉向观测，协方差随之变小。比例就是卡尔曼增益。</p>
+
+  <div class="formula-block is-stacked">
+    <span class="formula"><span class="fx-line">K = P⁻H<sup>⊤</sup>(HP⁻H<sup>⊤</sup> + R)<sup>−1</sup></span><span class="fx-line">x<sup>+</sup> = x<sup>−</sup> ⊕ K(z − h(x<sup>−</sup>)),　P<sup>+</sup> = (I − KH)P<sup>−</sup></span></span>
+    <span class="formula-no">8.3</span>
+  </div>
+
+  <p>把符号定下来：H 是观测矩阵，把状态映射成观测——只测位置时 H = [1 0]；P⁻ 是预测之后的协方差（还没吃这个观测），R 是观测噪声的协方差，I 是单位阵；x⁻ 与 x⁺ 是更新前、更新后的状态，h(x⁻) 是按预测状态算出来的「应该看到什么」。三维时它们都是矩阵，一维时退化成三个数，下一段的算术就是退化后的版本。</p>
+
+  <p>一维算术最能说明问题。预测给出位置 ±10 cm（P⁻ = 0.01 m²），里程计报来一个 ±5 cm 的位置（R = 0.0025 m²）。K = 0.01/(0.01 + 0.0025) = 0.8，融合后的标准差是 10×5/√(10² + 5²) = 4.47 cm。两个各 ±10 cm 的独立观测融合后是 7.07 cm，正好是 1/√2。这就是协方差的用处：它不是误差，是不确定度；它既决定这一拍该信谁多少，也决定下一拍该信谁多少。</p>
+
+  <p>式中的 ⊕ 是流形上的加法，这一点要展开两层。第一层：姿态不能像位置那样三个数直接相加。用欧拉角描述姿态，在 ±90° 附近会奇异——两个轴重合，同一个姿态有无穷多组角，微分方程在那里没有唯一解，姿态误差也就无从定义。所以工程上把姿态误差写成「绕某个轴转多少度」这个三维向量，再用 Exp 把它变成旋转矩阵、右乘回原姿态：R ← Exp(δθ)·R，而不是矩阵逐元素相加。所有三维旋转构成的集合记作 SO(3)，它是个群——元素之间能相乘（连续转两次）、有单位元（不转）、每个元素有逆（反着转），流形指的就是这个集合本身弯曲、不能用一个平面坐标系覆盖。第二层：不变扩展卡尔曼滤波（Invariant EKF, IEKF）只是把这套加法定义得更一致——误差在机体坐标系里用同一套规则传播，滤波器不会因为机器人处在某个特定姿态就丢掉对某个方向的观测能力，也就是「可观测性一致」。反过来说，把欧拉角当成普通三维向量去加减、去插值，正是姿态估计最常见的实现错误。</p>
+
+  <h3>接触：一条别人没有的观测</h3>
+
+  <p>腿式机器人还有一条别人没有的信息：支撑脚在世界系里的速度为零。符号先说明白：v 是机体线速度，ω 是机体角速度，r<sub>f</sub> 是机体原点到支撑脚接触点的向量，R<sub>i</sub> 是机体姿态矩阵，n 是观测噪声。括号里算的是接触点相对世界的速度，乘 R<sub>i</sub><sup>⊤</sup> 把它投影回机体系；因为着地脚在世界系的速度为零，这三个分量就成了对 v 与 ω 的三条标量约束——这也是它比只报速度的里程计更值钱的地方。写成观测就是下面这条。</p>
+
+  <div class="formula-block">
+    <span class="formula">z = R<sub>i</sub><sup>⊤</sup>(v + ω × r<sub>f</sub>) = 0 + n,　n ~ N(0, R<sub>zupt</sub>)</span>
+    <span class="formula-no">8.4</span>
+  </div>
+
+  <p>这条观测补上了 IMU 最缺的东西：IMU 只会说「加速度是多少」，不会说「没动」。零速更新（Zero Velocity Update, ZUPT）是它最朴素的形式，也是 1990 年代惯导在 GPS 失效时能撑住几分钟的原因。</p>
+
+  <p>关键在于：不能把它写成硬约束。因为「支撑脚不动」是假设，不是事实。接触判定有 5–30 ms 的窗口期，脚在落地瞬间会微滑 1–2 cm，踩在碎石或地毯上滑得更多。一旦写成 R = 0 的硬约束，滤波器会把「其实在滑」的那 2 cm 当成真实运动的反面灌进去，协方差瞬间坍缩到接近零；此后真出现 5 cm 的偏差，它要 100 倍的时间才肯重新相信观测——这叫过度自信。工程做法是写成带协方差的软观测，再用 χ² 门限剔除离群：一维 99% 门限 6.63，二维 9.21，三维 11.34。图 8.3 拆开了这 20 ms 的构成。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 340" role="img" aria-labelledby="ch08-fig3-title ch08-fig3-desc">
+      <title id="ch08-fig3-title">足端法向力与接触判定延迟</title>
+      <desc id="ch08-fig3-desc">横轴为时间 0 到 1.2 秒，数据从 0.26 秒开始，纵轴为足端法向力 0 到 900 牛顿。真实触地在 0.300 秒，力在 50 毫秒内升到 900 牛顿后稳定在 800 牛顿；50 牛顿阈值在 0.303 秒被穿越，但接触标志到 0.320 秒才发布，晚 20 毫秒。</desc>
+      <line x1="72" y1="60" x2="72" y2="300" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="72" y1="300" x2="566" y2="300" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="72" y1="246.7" x2="566" y2="246.7" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <line x1="72" y1="193.3" x2="566" y2="193.3" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <line x1="72" y1="140" x2="566" y2="140" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <line x1="72" y1="86.7" x2="566" y2="86.7" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <text x="64" y="304" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">0</text>
+      <text x="64" y="250.7" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">200</text>
+      <text x="64" y="197.3" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">400</text>
+      <text x="64" y="144" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">600</text>
+      <text x="64" y="90.7" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">800</text>
+      <text x="154.3" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">0.2</text>
+      <text x="236.7" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">0.4</text>
+      <text x="319" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">0.6</text>
+      <text x="401.3" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">0.8</text>
+      <text x="483.7" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">1.0</text>
+      <rect x="195.5" y="60" width="8.2" height="240" style="fill:var(--d4);fill-opacity:.14"/>
+      <polyline points="179,300.0 182,300.0 186,300.0 189,300.0 192,300.0 196,300.0 199,261.6 202,223.2 205,184.8 209,146.4 212,108.0 215,69.6 219,62.3 222,65.3 225,68.4 228,71.4 232,74.5 235,77.5 238,80.6 242,83.6 245,86.7 248,82.1 251,84.0 255,89.8 258,91.1 261,86.1 265,81.9 268,84.5 271,90.2 275,90.8 278,85.6 281,81.9 284,85.0 288,90.5 291,90.5 294,85.0 298,81.9 301,85.6 304,90.8 307,90.2 311,84.5 314,81.9 317,86.1 321,91.1 324,89.7 327,84.0 331,82.1 334,86.7 337,91.3 340,89.3 344,83.6 347,82.3 350,87.2 354,91.4 357,88.8 360,83.2 363,82.5 367,87.8 370,91.5 373,88.3 377,82.8 380,82.8 383,88.3 387,91.5 390,87.8 393,82.5 396,83.2 400,88.8 403,91.4 406,87.2 410,82.3 413,83.6 416,89.3 419,91.3 423,92.8 426,117.1 429,141.5 433,165.9 436,190.3 439,214.7 443,239.0 446,263.4 449,287.8 452,300.0 456,300.0 459,300.0 462,300.0 466,300.0" style="fill:none;stroke:var(--d1);stroke-width:1.6"/>
+      <line x1="72" y1="286.7" x2="566" y2="286.7" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:5 4"/>
+      <text x="560" y="282" class="t-label" text-anchor="end" style="font-size:11px;fill:var(--accent-3);">判定阈值 50 N</text>
+      <line x1="195.5" y1="60" x2="195.5" y2="300" style="stroke:var(--d2);stroke-width:1"/>
+      <text x="191" y="76" class="t-label" text-anchor="end" style="font-size:11px;fill:var(--accent-2-ink);">真实触地 0.300 s</text>
+      <line x1="203.7" y1="60" x2="203.7" y2="300" style="stroke:var(--d4);stroke-width:1"/>
+      <text x="209" y="106" class="t-label" style="font-size:11px;fill:var(--accent-3);">标志发布 0.320 s</text>
+      <text x="209" y="122" class="t-label" style="font-size:11px;fill:var(--accent-3);">晚 20 ms，在 1.5 m/s 下就是 3 cm</text>
+      <text x="72" y="26" class="t-label" style="font-size:12px;fill:var(--ink);">足端法向力 / N</text>
+      <text x="566" y="26" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">时间 / s</text>
+      <text x="72" y="334" class="t-label" style="font-size:11px;fill:var(--muted-ink);">峰值 900 N 出现在触地后 50 ms：冲击力是体重的 1.5 倍，接触判定的窗口就在这段上升沿里</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 8.3</span>足端法向力与接触判定：真实触地在 0.300 s，50 N 阈值在 0.303 s 被穿越，接触标志到 0.320 s 才发布。
+      <span class="fig-note read-for">读者应看出：判定延迟不是「传感器慢」，而是阈值穿越点加上估计器的节拍与确认帧；这 20 ms 在 1.5 m/s 下等于 3 cm 的位置错位，恰好是 06 章落点预算的 3 倍。</span>
+      <span class="fig-src">来源：作者绘制，力曲线按 50 ms 上升沿与 800 N 稳态构造，量级取自公开的四足/双足测量。</span>
+    </figcaption>
+  </figure>
+
+  <h2>时间同步：20 ms 能毁掉什么</h2>
+  <p>这一节解决什么问题：说清 20 ms 的时间错位如何在数值上变成落点误差，以及工程上怎么把它压到 1 ms 以内。</p>
+
+  <p>传感器来自三个时钟。IMU 在自己的采样中断里打时间戳，相机在曝光开始时打，编码器在总线帧里带。三个晶振不同、启动时刻不同，默认它们对齐的代价是 5–30 ms 的系统偏差——它不会随机抵消，会一直偏在同一个方向。</p>
+
+  <p>先算位置误差。1.5 m/s 的行走，20 ms 就是 3 cm。06 章算过：落脚点差 1 cm，一步之后发散运动分量差 7.9 cm。3 cm 的时间错位就是 3 倍的落点预算——不是「有点误差」，是「这一步必然要额外修正」。</p>
+
+  <p>再算相位。50 Hz 的控制环，20 ms 正好是一个整周期，相位损失 360°：延迟一拍的控制律看到的是上一拍的误差，符号都可能反。退到步频的尺度，2 Hz 时 20 ms 是 14.4°，5 Hz（跑步）时是 36°。一个设计成 40° 相位裕度的环，被延迟吃掉一半，阶跃响应就会振铃。</p>
+
+  <p>补法有三种，代价递增。硬件触发：相机曝光信号直接触发 IMU 采样，或用 PTP（IEEE 1588）把时钟同步到亚微秒，这是最好的，代价是布线与驱动支持。插值：把慢的传感器插到快的时刻上，姿态用球面线性插值（spherical linear interpolation, slerp），位置用线性；误差是 ½aΔt²，0.6 m/s² 的加速度、10 ms 间隔下只有 0.03 mm，可以忽略。外推：把估计推到「现在」，噪声放大 √(1 + τ/T)，τ = 20 ms、T = 5 ms 时放大 2.2 倍——延迟越大，外推越像赌博。</p>
+
+  <aside class="callout callout--field" data-reveal>
+    <p class="callout-kicker">工程经验 <span>Field Note</span></p>
+    <p>相机与 IMU 的时间偏移不要信标称值。让一个 LED 在相机视野里闪、同时把闪光接到 IMU 的同步引脚，比对两组时间戳——实测偏移常在 8–15 ms，标定后残差能到 1 ms 以内。同样的道理适用于足端力传感器：它的采样时刻和关节编码器差 1–2 ms，在 3 m/s 的摆动腿上是 3–6 mm 的位置错位，足够让落地检测早或晚一拍。</p>
+  </aside>
+
+  <h2>地形：把点云压成一张能踩的地图</h2>
+  <p>这一节解决什么问题：把三维感知压成一张二维的「能不能踩」的地图，并算出「看多远才来得及停」。</p>
+
+  <p>高程图（elevation map）是最常用的中间表示：把地面切成 2–5 cm 的格子，每格存一个高度和一个方差。深度相机或激光点云按射线投射写进格子，GPU 上 10–30 Hz 能刷完 4 m × 4 m。存方差是关键——一格 2 cm 的高度和一格 8 cm 的高度，在代价函数里不该同权。</p>
+
+  <p>为什么不把点云直接交给规划：点云是三维的，点数随分辨率按面积涨，4 m × 4 m、2 cm 的格子就对应四万个位置，每次查询都要在几万个点里找邻域；压成 2.5D 的格子后，每格只有一个高度和一个方差，按坐标直接取，查询是 O(1)。代价是压扁会丢结构——桌子下面、悬空的横杆、两条腿之间的空隙，在单层高程图里都只能写成「地面」，要么上多层高程图，要么交给别的表示。</p>
+
+  <p>可通行性代价写成加权和：<span class="formula-inline">c = w<sub>h</sub>|Δh| + w<sub>s</sub>σ + w<sub>r</sub>·roughness</span>，Δh 是相邻格高差，σ 是该格标准差，roughness 是局部曲率。权重不是调出来的玄学：w<sub>h</sub> 的量级由抬脚高度决定——抬脚 20 cm、留 5 cm 余量，所以 |Δh| &gt; 0.15 m 的格子按常规步态判为不可通行；除非地形模块把它识别成楼梯并切到爬楼步态，那是另一套控制器。</p>
+
+  <p>台阶检测本质上是阶跃检测，难在信噪比。常见楼梯的踢面 0.15–0.18 m、踏面 0.25–0.30 m；高程图噪声 1–2 cm，15 cm 的踢面信噪比 7.5–15，随便一个阈值都能检出。真正难的是 3–5 cm 的路缘和地毯边：信噪比 1.5–3，和噪声同量级，检不出来就绊，检错了就原地停步。这就是为什么实机上「能上楼梯」和「能走人行道」是两个难度，图 8.4 把这两种情况画在同一段剖面里。</p>
+
+  <p>再看停步距离。从感知到停住，中间有三段时间：感知与规划延迟 τ、执行器响应、减速本身。合起来 <span class="formula-inline">d = vτ + v<sup>2</sup>/(2a)</span>。取 τ = 0.15 s、a = 3 m/s²：1.5 m/s 需要 0.6 m，3 m/s 需要 2.0 m。所以前视距离不是「看到 1 m 就够」，而是「看到 1 m 之外还得留 0.6 m 刹车」；3 m/s 时前视至少 3 m，而 10 Hz 的高程图在 3 m/s 下每帧只前进 30 cm——漏掉两帧，前方就有 60 cm 从未被更新过。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 360" role="img" aria-labelledby="ch08-fig4-title ch08-fig4-desc">
+      <title id="ch08-fig4-title">高程图剖面与台阶检测</title>
+      <desc id="ch08-fig4-desc">横轴为水平距离 0 到 4 米，纵轴为高度 负 0.2 到 0.6 米。真值剖面为两级 0.17 米踢面的楼梯，随后是一段 0.04 米木板。细线为带 2 厘米高斯噪声的高程图测量，15 厘米踢面的信噪比约 7.5，4 厘米木板的信噪比只有 2。</desc>
+      <line x1="72" y1="52" x2="72" y2="300" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="72" y1="300" x2="566" y2="300" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="72" y1="238" x2="566" y2="238" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <line x1="72" y1="176" x2="566" y2="176" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <line x1="72" y1="114" x2="566" y2="114" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <text x="64" y="304" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">−0.2</text>
+      <text x="64" y="242" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">0</text>
+      <text x="64" y="180" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">0.2</text>
+      <text x="64" y="118" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">0.4</text>
+      <text x="64" y="56" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">0.6</text>
+      <text x="72" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">0</text>
+      <text x="195.5" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">1</text>
+      <text x="319" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">2</text>
+      <text x="442.5" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">3</text>
+      <text x="566" y="316" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">4</text>
+      <polyline points="72.0,246.3 75.1,235.4 78.2,231.2 81.3,241.5 84.3,247.1 87.4,238.4 90.5,234.7 93.6,230.5 96.7,246.3 99.8,246.8 102.9,233.2 106.0,234.8 109.0,227.5 112.1,231.3 115.2,238.7 118.3,239.9 121.4,220.5 124.5,240.0 127.6,243.4 130.7,245.8 133.8,237.3 136.8,237.0 139.9,240.4 143.0,238.4 146.1,236.1 149.2,233.3 152.3,230.5 155.4,236.6 158.5,250.2 161.5,233.2 164.6,247.7 167.7,239.2 170.8,248.1 173.9,238.0 177.0,243.3 180.1,236.5 183.2,215.5 186.2,238.3 189.3,232.3 192.4,247.0 195.5,187.3 198.6,180.8 201.7,185.9 204.8,182.8 207.9,184.6 210.9,192.2 214.0,181.5 217.1,190.8 220.2,172.5 223.3,188.7 226.4,180.6 229.5,185.3 232.5,178.8 235.6,189.4 238.7,178.5 241.8,186.1 244.9,176.7 248.0,128.3 251.1,131.6 254.2,137.9 257.2,127.4 260.3,129.4 263.4,121.4 266.5,135.2 269.6,128.8 272.7,129.1 275.8,130.7 278.9,131.2 281.9,131.4 285.0,136.7 288.1,139.5 291.2,135.3 294.3,128.6 297.4,122.3 300.5,125.9 303.6,125.4 306.6,127.3 309.7,127.8 312.8,131.3 315.9,127.3 319.0,120.5 322.1,134.8 325.2,137.3 328.3,119.2 331.3,130.9 334.4,126.0 337.5,126.6 340.6,140.3 343.7,116.0 346.8,120.5 349.9,131.4 353.0,127.5 356.0,131.7 359.1,138.6 362.2,133.4 365.3,130.0 368.4,125.0 371.5,180.5 374.6,184.9 377.7,176.1 380.7,190.5 383.8,179.9 386.9,177.7 390.0,187.3 393.1,197.5 396.2,191.5 399.3,183.7 402.4,181.7 405.4,174.7 408.5,192.1 411.6,185.3 414.7,180.9 417.8,186.4 420.9,254.2 424.0,232.5 427.1,222.2 430.1,231.2 433.2,244.3 436.3,240.8 439.4,236.5 442.5,221.0 445.6,233.8 448.7,237.2 451.8,227.4 454.8,238.6 457.9,225.3 461.0,242.7 464.1,241.2 467.2,233.1 470.3,215.9 473.4,221.1 476.5,223.5 479.5,238.0 482.6,230.5 485.7,229.8 488.8,229.2 491.9,221.6 495.0,227.9 498.1,220.2 501.2,225.0 504.2,227.9 507.3,224.8 510.4,222.7 513.5,219.7 516.6,228.9 519.7,227.2 522.8,234.9 525.9,214.7 528.9,215.7 532.0,239.2 535.1,241.3 538.2,246.4 541.3,236.8 544.4,236.6 547.5,223.1 550.6,236.3 553.6,243.3 556.7,254.7 559.8,228.4 562.9,236.7 566.0,249.0" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.85"/>
+      <polyline points="72.0,238.0 195.5,238.0 195.5,185.3 244.9,185.3 244.9,132.6 294.3,132.6 368.4,132.6 368.4,185.3 417.8,185.3 417.8,238.0 467.2,238.0 467.2,225.6 529.0,225.6 529.0,238.0 566.0,238.0" style="fill:none;stroke:var(--d1);stroke-width:1.8"/>
+      <line x1="244.9" y1="185.3" x2="244.9" y2="132.6" style="stroke:var(--d2);stroke-width:1"/>
+      <line x1="240.9" y1="185.3" x2="248.9" y2="185.3" style="stroke:var(--d2);stroke-width:1"/>
+      <line x1="240.9" y1="132.6" x2="248.9" y2="132.6" style="stroke:var(--d2);stroke-width:1"/>
+      <text x="252" y="152" class="t-label" style="font-size:11px;fill:var(--accent-2-ink);">踢面 0.17 m · SNR 7.5</text>
+      <text x="470" y="204" class="t-label" style="font-size:11px;fill:var(--accent-2-ink);">木板 0.04 m · SNR 2</text>
+      <line x1="470" y1="208" x2="482" y2="222" style="stroke:var(--accent-2-ink);stroke-width:.8"/>
+      <text x="72" y="26" class="t-label" style="font-size:12px;fill:var(--ink);">高度 / m</text>
+      <text x="566" y="26" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">水平距离 / m</text>
+      <line x1="72" y1="338" x2="94" y2="338" style="stroke:var(--d1);stroke-width:1.8"/>
+      <text x="100" y="342" class="t-label" style="font-size:11px;fill:var(--muted-ink);">真实剖面</text>
+      <line x1="212" y1="338" x2="234" y2="338" style="stroke:var(--d3);stroke-width:.9"/>
+      <text x="240" y="342" class="t-label" style="font-size:11px;fill:var(--muted-ink);">高程图测量（σ = 2 cm）</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 8.4</span>高程图剖面：两级 0.17 m 踢面的楼梯跟在 3.2 m 处的 0.04 m 木板，噪声同为 ±2 cm。
+      <span class="fig-note read-for">读者应看出：同一个噪声水平下，0.17 m 的踢面一眼可辨，0.04 m 的木板完全埋在噪声里——台阶检测的能力上限由噪声与最小可跨越高度的比值决定，不是由算法决定。</span>
+      <span class="fig-src">来源：作者绘制，噪声按 2 cm 高斯生成，楼梯几何取常见规范值。</span>
+    </figcaption>
+  </figure>
+
+  <h2>SLAM：把漂移关进回环里</h2>
+  <p>这一节解决什么问题：房间尺度上，「我在哪」不能靠积分，只能靠认出「这是哪」。</p>
+
+  <p>腿里程计 1–3% 的漂移，走 100 m 回到原点，差 1–3 m——足够让你以为自己在隔壁房间。同时定位与建图（Simultaneous Localization and Mapping, SLAM）就是处理这件事：一边建图，一边用图来定位。回环检测（loop closure）把误差一次压回 5 cm 量级：认出曾经来过的地方，把「现在的位姿」和「当时的位姿」连成一条边，整条轨迹一起重优化。</p>
+
+  <p>两条实现路线，差别在算力与可扩展性。滤波（EKF / IEKF）只保留当前状态与协方差，算力 O(1)，接触辅助的不变 EKF 能把状态压到 20 维量级，单核 CPU 跑到 IMU 频率；代价是线性化误差、不能回环，接触误判只能靠 χ² 检验补救。因子图（factor graph）把每帧位姿和每条观测都存成节点与边，回环时重优化窗口，10–50 ms 一次，代价是要做关键帧管理与内存控制。选型判据很硬：只要本体感知、算力紧，选 EKF；要跨房间、要回环、传感器异构，选因子图。</p>
+
+  <p><a href="https://arxiv.org/abs/2107.07243">VILENS</a> 是后者的代表：把腿部预积分速度因子、视觉、激光、IMU 放进同一个图，还额外估计一个「腿部速度偏置」——因为纯运动学在打滑时会系统性偏，不估这一项，视觉和腿会互相打架。这条经验值得记住：多传感器融合里，先问「哪个传感器有系统偏差」，再问「怎么加权」。</p>
+
+  <p>动态环境是另一个坑。办公室里有人走动，回环会把「人」当成地标，第二天人走了，地图就错了。<a href="https://arxiv.org/abs/1806.05620">DynaSLAM</a> 用语义分割把人和车剔掉再建图。长期地图还要处理家具挪动：常见做法是保留多份子图，按当前观测选最匹配的一份，而不是每次重建。</p>
+
+  <h2>操作：手上有多少力，比手在哪更重要</h2>
+  <p>这一节解决什么问题：从「把手挪到某个坐标」升级到「把多大的力施加在哪个方向」。</p>
+
+  <p>抓取位姿（grasp pose）是一个 6 维量：3 维位置加 3 维姿态。对平行夹爪，最稳的是反对跖抓取（antipodal grasp）：两个接触点的法线共线且相向，夹紧力只产生法向力，不产生让物体转动的力矩。夹持力有下限：2 kg 的杯子、摩擦系数 0.5，每指至少要 19.6 N；取 2 倍安全系数就是 40 N，落在常见夹爪 20–200 N 的行程里。低于这个数，加速度一上来物体就打滑。</p>
+
+  <p>力控的核心是阻抗（impedance）：不指定位置，而指定「位置偏差对应多大的力」。位置是结果，刚度才是指令。</p>
+
+  <div class="formula-block">
+    <span class="formula">τ = J<sup>⊤</sup>[K<sub>p</sub>(x<sub>d</sub> − x) + K<sub>d</sub>(<span class="qdot">x</span><sub>d</sub> − <span class="qdot">x</span>) + F<sub>ff</sub>] + g(q)</span>
+    <span class="formula-no">8.5</span>
+  </div>
+
+  <p>K<sub>p</sub> 的选择是安全与精度的兑换。拎 2 kg 的负载需要 19.6 N：K<sub>p</sub> = 2000 N/m 时下垂 1 cm，位置很准，但末端意外撞到人 5 cm，就是 100 N——相当于挂上 10 kg 的重物；K<sub>p</sub> = 200 N/m 时下垂 10 cm，同样的 5 cm 侵入只有 10 N。装配任务要前者，人机共处要后者；实机上常用变阻抗：接近时软，接触后硬。</p>
+
+  <p>力控带宽比位置环低一个量级。电流环 20 kHz、关节力矩环 1 kHz，但末端力控通常只有 100–1000 Hz：串联刚度、减速器背隙、滤波器的相位都把带宽吃掉了。这就是为什么「轻拿轻放」比「准确定位」难——你要控的量，恰恰是被机械结构滤掉的那部分。</p>
+
+  <h3>双臂与全身：接触点不止在手</h3>
+
+  <p>双臂协调多两个约束：两臂末端的相对位姿要固定，否则物体被拧；内力要显式控制。两台 7 自由度臂各用 50 N 对推一个盒子，盒子受的净力是 0，但内力是 100 N——足以把 2 kg 的纸箱压瘪。所以双臂控制器要同时解「相对位姿」和「内力分配」两组任务，这也是 05 章分层 QP 最典型的用武之地。</p>
+
+  <p>全身操作（whole-body manipulation）把接触点从手扩展到全身：用肩顶、用胯靠、用前臂压。推一个 20 kg 的箱子，地面摩擦 0.5，需要 98 N 的水平力；机器人自身 60 kg、同样摩擦，能出 294 N，够用。但接触点高 1.2 m 时，98 N 产生 118 N·m 的倾覆力矩，必须把质心前移或让后脚蹬地——问题又回到 05、06 章的 WBC 与 ZMP。</p>
+
+  <h2>遥操作：既是产品，也是数据源</h2>
+  <p>这一节解决什么问题：说清人现在为什么还在环路里，以及人怎么把「手感」变成能训练的数据。</p>
+
+  <p>四种输入方式，差别在带宽和力反馈。VR 头显（Apple Vision Pro 一类）用头部 6 自由度加手部追踪，手部 30–90 Hz，无遮挡时精度 1–2 cm；光学动捕 100–240 Hz、毫米级精度，但要一屋子相机；外骨骼能一对一映射关节角并回传力，成本最高；主从臂（ALOHA 式）最土也最有效——操作者直接握住从臂，力和位姿天然对齐。</p>
+
+  <p>延迟是硬指标。人对 100 ms 以内的延迟可以适应，超过之后开始出现「犹豫—过冲」：先推一点、看没反应、再推、然后收。这段动作会被原样录进示教数据，策略学到的不是任务，是操作者的手抖。这是「数据质量」里最容易被忽略的一条：录数据时先量端到端延迟，再谈采多少条。</p>
+
+  <p>遥操作既是产品也是数据源。产品侧：Figure、1X 都公开演示过人在环路里兜底——机器人卡住的瞬间人接管几秒，处理完再交还。数据侧：ALOHA 用主从臂采 50 条示教，就能训出 80–90% 成功率的精细双臂任务；<a href="https://arxiv.org/abs/2407.01512">Open-TeleVision</a> 用立体视觉加手部映射，在两种人形上采长程任务。没有遥操作，就没有下一节的模仿学习。</p>
+
+  <h2>模仿学习与 VLA：动作块是分水岭</h2>
+  <p>这一节解决什么问题：示教怎么变成策略，以及为什么「一次预测一段动作」是这条路上真正的分水岭。</p>
+
+  <p>最直接的做法是学一个映射 π(a<sub>t</sub> | o<sub>t</sub>)：看到什么，出什么动作。两个问题立刻出现。每条示教只有几百个样本点，逐帧学必然过拟合；单帧观测也不足以判断动作的相位——同一张图，可能是「伸手」也可能是「收回」。动作块（action chunking）把这两件事一起解决：一次预测未来 H 步，只执行前 k 步，然后重规划。</p>
+
+  <div class="formula-block">
+    <span class="formula">π<sub>θ</sub>(a<sub>t:t+H</sub> | o<sub>t</sub>),　执行 a<sub>t:t+k</sub>,　k &lt; H</span>
+    <span class="formula-no">8.6</span>
+  </div>
+
+  <p>H = 100、控制 50 Hz 就是 2 s 的动作；k = 50 就是 1 s 的开环执行。这把「策略要多快」和「动作要多细」解耦了：策略可以慢，动作依然连续。ACT 就是靠这一招在 50 Hz 的真机上跑 CVAE 加 Transformer：每个任务 50 条示教、每条 8–14 s、合计 10–20 分钟，六个任务成功率 80–90%。</p>
+
+  <p>扩散策略（Diffusion Policy）换了一个角度：把动作分布建模成去噪过程，能表达多峰——同一个杯子，从左抓和从右抓都对，逐帧回归会把两者平均成一个抓不到的位置。代价是推理要迭代 10–100 步，频率比 ACT 低一个量级。选型判据：低成本硬件、要高频闭环，选 ACT；多模态示教、能接受低频，选扩散。</p>
+
+  <h3>从动作块到 VLA</h3>
+
+  <p>再往上是视觉-语言-动作模型（Vision-Language-Action, VLA）：把图像和语言直接映射到动作，借视觉语言模型的语义先验。RT-2 把动作离散成文本 token，和语言共享同一个头，55B 版本在 6000 次试验里表现出「把石头当锤子」这类迁移，但自回归推理只有 1–3 Hz。π0 换成 3.3B 的视觉语言模型加 300M 的动作专家，用流匹配（flow matching）直接回归连续动作块，最高 50 Hz。GR00T N1 把这件事拆成两级：2.2B 的模型里，System 2 跑 10 Hz 做语义推理，System 1 跑 120 Hz 出动作，在 L40 上用 bf16 采 16 步动作块耗时 63.9 ms。图 8.5 把这四层的决策周期放在同一根对数轴上。</p>
+
+  <p>这一段里有四个词值得拆开。token 是语言模型的基本单位：RT-2 把每个动作维度离散成 256 个区间（bin），一个 bin 就是一个 token，动作于是变成了「句子」。55B 指 550 亿参数，B 就是 billion。流匹配就是 π0 用的那一套：学一个把噪声逐步搬成动作序列的速度场，一次生成整段连续动作块，不必像自回归那样一个 token 一个 token 地往外吐。bf16 是 bfloat16，16 位浮点：指数范围与 fp32 相同、尾数只有 7 位，省显存也省带宽，代价是精度低一些。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 8.2 五种策略的规格与边界</caption>
+      <thead>
+        <tr><th>方法</th><th class="num">输出频率</th><th>动作表示</th><th>数据需求</th><th>失效模式</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>ACT</td><td class="num">50 Hz</td><td>连续动作块（CVAE）</td><td>50 条/任务</td><td>长程、外观变化</td></tr>
+        <tr><td>Diffusion Policy</td><td class="num">5–15 Hz</td><td>去噪动作块</td><td>100 条量级</td><td>推理慢、延迟敏感</td></tr>
+        <tr><td>RT-2</td><td class="num">1–3 Hz</td><td>离散 token</td><td>网络规模</td><td>精细操作、实时性</td></tr>
+        <tr><td>π0</td><td class="num">最高 50 Hz</td><td>连续动作块（流匹配）</td><td>跨本体混合</td><td>未见本体要微调</td></tr>
+        <tr><td>GR00T N1</td><td class="num">S2 10 Hz / S1 120 Hz</td><td>两级：语义 + 动作头</td><td>混合数据</td><td>长时序要拆解</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 300" role="img" aria-labelledby="ch08-fig5-title ch08-fig5-desc">
+      <title id="ch08-fig5-title">语义推理、动作策略与关节伺服的频率阶梯</title>
+      <desc id="ch08-fig5-desc">横轴为频率 1 到 2000 赫兹的对数刻度，四行分别为语义推理 10 赫兹、动作块策略 50 赫兹、动作头 120 赫兹、关节伺服 1 千赫兹，对应的决策周期是 100、20、8.3 和 1 毫秒。</desc>
+      <line x1="72" y1="252" x2="566" y2="252" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="72" y1="68" x2="72" y2="252" style="stroke:var(--line);stroke-width:.8"/>
+      <line x1="221.6" y1="68" x2="221.6" y2="252" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <line x1="371.2" y1="68" x2="371.2" y2="252" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <line x1="521" y1="68" x2="521" y2="252" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 4"/>
+      <rect x="72" y="80" width="149.6" height="14" style="fill:var(--d4);fill-opacity:.22;stroke:var(--d4);stroke-width:1"/>
+      <text x="78" y="72" class="t-label" style="font-size:11px;fill:var(--ink);">System 2 · 语义推理</text>
+      <text x="229" y="92" class="t-mono" style="font-size:11px;fill:var(--accent-3);">10 Hz / 100 ms</text>
+      <rect x="72" y="130" width="254.3" height="14" style="fill:var(--d3);fill-opacity:.2;stroke:var(--d3);stroke-width:1"/>
+      <text x="78" y="122" class="t-label" style="font-size:11px;fill:var(--ink);">策略 · 一次出 100 步动作块</text>
+      <text x="334" y="142" class="t-mono" style="font-size:11px;fill:var(--accent-3);">50 Hz / 20 ms</text>
+      <rect x="72" y="180" width="311.1" height="14" style="fill:var(--d1);fill-opacity:.18;stroke:var(--d1);stroke-width:1"/>
+      <text x="78" y="172" class="t-label" style="font-size:11px;fill:var(--ink);">System 1 · 动作头</text>
+      <text x="391" y="192" class="t-mono" style="font-size:11px;fill:var(--accent);">120 Hz / 8.3 ms</text>
+      <rect x="72" y="230" width="449" height="14" style="fill:var(--d2);fill-opacity:.2;stroke:var(--d2);stroke-width:1"/>
+      <text x="78" y="222" class="t-label" style="font-size:11px;fill:var(--ink);">关节伺服 · 力矩环</text>
+      <text x="566" y="226" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--accent-2-ink);">1 kHz / 1 ms</text>
+      <text x="72" y="272" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">1</text>
+      <text x="221.6" y="272" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">10</text>
+      <text x="371.2" y="272" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">100</text>
+      <text x="521" y="272" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">1000</text>
+      <text x="566" y="290" class="t-label" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">频率 / Hz（对数）</text>
+      <text x="72" y="26" class="t-label" style="font-size:12px;fill:var(--ink);">每一层的决策周期：从 100 ms 到 1 ms，差 100 倍</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 8.5</span>四层决策的频率阶梯：语义 10 Hz、动作块 50 Hz、动作头 120 Hz、关节伺服 1 kHz。
+      <span class="fig-note read-for">读者应看出：语义推理与伺服之间差 100 倍，中间必须靠「动作块」这类开环段补上；VLA 之所以要分 System 1 / System 2，不是架构偏好，是频率差逼出来的。</span>
+      <span class="fig-src">来源：作者绘制，频率取自 ACT、π0、GR00T N1 与常见伺服环的公开数值。</span>
+    </figcaption>
+  </figure>
+
+  <aside class="callout callout--warning" data-reveal>
+    <p class="callout-kicker">警告 <span>Warning</span></p>
+    <p>VLA 的涌现能力是定性观察，不是可靠性指标。RT-2 的「拿石头当锤子」出自 6000 次试验里的个案，同一模型在未见物体上的成功率会低一个档次。判断一个 VLA 能不能上线，看三件事：在你的物体上成功率多少、失败时会不会安全停下、单次推理延迟是否短于动作块的长度——三条缺一条，它就只是个演示。</p>
+  </aside>
+
+  <h2>三个真实系统：Atlas、Figure 02、Optimus</h2>
+  <p>这一节解决什么问题：看三个公开系统怎么在这三件事上取舍，以及哪些结论能从公开资料里确认、哪些不能。</p>
+
+  <p>Atlas。2015 年 DRC 版本的 Atlas 头部装了激光雷达与多目相机，Kuindersma 等 2016 年公开的栈里，状态估计以 IMU 加腿部运动学打底、激光与视觉做定位修正，控制是模型预测加全身 QP。2024 年 4 月波士顿动力换成全电 Atlas，公开演示里能看到头部一圈传感器，但算法细节没有论文公开——任何声称确切知道它用哪种滤波器的说法都是猜的。能确认的只有架构：本体感知跑高频、外部感知跑低频、模型预测在中间。</p>
+
+  <p>Figure 02。公开演示的重点不是行走，是对话：人说一句，它隔 1–2 s 开始动作，中间隔着语音识别、大模型推理、任务分解、技能调用四层。这条链路的频率是 1 Hz 量级，和 1 kHz 的伺服差三个数量级，所以它必须待在频率阶梯的最顶端，把具体动作交给下面的技能库。这也是所有「会说话的人形」的共同架构：语言模型不产生力矩，它只选技能。</p>
+
+  <p>Optimus。公开表述是纯视觉：不用激光雷达，靠多目相机加神经网络，与 FSD 同源。纯视觉的代价可以用视差公式算清楚：<span class="formula-inline">σ<sub>z</sub> ≈ z<sup>2</sup>σ<sub>d</sub>/(f·b)</span>。f = 500 px、基线 b = 0.12 m、视差误差 0.2 px 时，1 m 处深度误差 3 mm，3 m 处 3 cm，5 m 处 8 cm。8 cm 已经超过半个踢面——所以纯视觉在操作距离（0.5–1.5 m）内绰绰有余，在导航距离（5 m 外）必须靠地图与记忆补。这不是「视觉行不行」的问题，是「在哪个距离上行」的问题。</p>
+
+  <h2>一段伪代码：预测、更新、门限</h2>
+  <p>这一节解决什么问题：把前面的公式落成三十行能读的代码，看清每个矩阵在做哪件事。</p>
+
+  <p>下面是一维（垂向）EKF 的伪代码，省略了姿态流形、腿部雅可比和零偏的随机游走——那些在三维版本里各占十几行。它保留了三个关键动作：用 IMU 预测、用里程计位置更新、用接触标志决定要不要做零速更新，以及一道 χ² 门限。</p>
+
+  <pre data-lang="python"><code><span class="tok-c"># IMU + 腿部里程计 + 零速更新的 EKF（伪代码，一维垂向）</span>
+<span class="tok-k">import</span> numpy <span class="tok-k">as</span> np
+
+dt   = <span class="tok-n">0.0025</span>                  <span class="tok-c"># IMU 周期 400 Hz</span>
+x    = np.array([<span class="tok-n">0.0</span>, <span class="tok-n">0.0</span>])      <span class="tok-c"># 状态 [位置 p, 速度 v]，m 与 m/s</span>
+P    = np.diag([<span class="tok-n">1e-4</span>, <span class="tok-n">1e-4</span>])   <span class="tok-c"># 初始不确定度：位置 ±1 cm、速度 ±1 cm/s</span>
+Qa   = <span class="tok-n">0.05</span>**<span class="tok-n">2</span> * dt             <span class="tok-c"># 加速度计噪声谱密度，m²/s³</span>
+R_leg, R_zupt = <span class="tok-n">0.03</span>**<span class="tok-n">2</span>, <span class="tok-n">0.02</span>**<span class="tok-n">2</span>   <span class="tok-c"># 位置 ±3 cm、零速 ±2 cm/s</span>
+
+<span class="tok-k">def</span> <span class="tok-f">predict</span>(x, P, acc):
+    F = np.array([[<span class="tok-n">1.0</span>, dt], [<span class="tok-n">0.0</span>, <span class="tok-n">1.0</span>]])
+    B = np.array([<span class="tok-n">0.5</span> * dt * dt, dt])
+    x = F @ x + B * acc                    <span class="tok-c"># 用 IMU 推一步</span>
+    P = F @ P @ F.T + Qa * np.outer(B, B)  <span class="tok-c"># 协方差只会变大</span>
+    <span class="tok-k">return</span> x, P
+
+<span class="tok-k">def</span> <span class="tok-f">update</span>(x, P, z, H, R):
+    y = <span class="tok-k">float</span>(z - H @ x)              <span class="tok-c"># 新息：观测减预测</span>
+    S = <span class="tok-k">float</span>(H @ P @ H.T) + R
+    <span class="tok-k">if</span> y * y / S &gt; <span class="tok-n">6.63</span>:            <span class="tok-c"># χ² 门限 99%，1 自由度</span>
+        <span class="tok-k">return</span> x, P                     <span class="tok-c"># 判为离群：宁可不用，也别污染协方差</span>
+    K = (P @ H.T) / S                 <span class="tok-c"># 卡尔曼增益：谁准信谁</span>
+    x = x + (K * y).ravel()
+    P = (np.eye(<span class="tok-n">2</span>) - K @ H) @ P
+    <span class="tok-k">return</span> x, P
+
+H_P = np.array([[<span class="tok-n">1.0</span>, <span class="tok-n">0.0</span>]])            <span class="tok-c"># 观测到位置</span>
+H_V = np.array([[<span class="tok-n">0.0</span>, <span class="tok-n">1.0</span>]])            <span class="tok-c"># 观测到速度</span>
+
+<span class="tok-k">for</span> k <span class="tok-k">in</span> <span class="tok-k">range</span>(<span class="tok-k">int</span>(<span class="tok-n">10.0</span> / dt)):
+    x, P = predict(x, P, imu.read_accel())       <span class="tok-c"># 已扣重力、已扣标定零偏</span>
+    <span class="tok-k">if</span> k % <span class="tok-n">8</span> == <span class="tok-n">0</span>:                            <span class="tok-c"># 50 Hz：里程计给位置</span>
+        x, P = update(x, P, leg_odom.position(), H_P, R_leg)
+    <span class="tok-k">if</span> foot_force[k] &gt; <span class="tok-n">50.0</span>:                  <span class="tok-c"># 判为支撑相才敢做零速更新</span>
+        x, P = update(x, P, <span class="tok-n">0.0</span>, H_V, R_zupt)</code></pre>
+
+  <p>读这段代码要盯住三处。第一，P 在预测里变大、在更新里变小，这个「呼吸」就是滤波器的工作节奏；如果 P 不呼吸，说明 Q 或 R 写错了。第二，零速更新只在 <code>foot_force &gt; 50 N</code> 时执行——这条判断本身就是第 3 节讲的接触检测，它错一次，滤波器就被灌进一次假信息。第三，χ² 门限放在更新内部：先怀疑观测，再决定要不要降低 P，这个顺序反了就会过度自信。</p>
+
+  <p>力控那一侧只有十行，但同样有一个必须做对的细节：限幅。超限的力矩指令在仿真里只是「不理想」，在真机上就是一次失控。</p>
+
+  <pre data-lang="cpp"><code><span class="tok-c">// 1 kHz 笛卡尔阻抗 + 重力补偿（伪代码，省略雅可比伪逆与奇异处理）</span>
+Eigen::Vector3d e  = x_d  - x;                  <span class="tok-c">// 位置误差，m</span>
+Eigen::Vector3d ed = xd_d - xd;                 <span class="tok-c">// 速度误差，m/s</span>
+Eigen::Vector3d F  = Kp.cwiseProduct(e)         <span class="tok-c">// Kp = 2000 N/m（装配）</span>
+                   + Kd.cwiseProduct(ed)        <span class="tok-c">// Kd = 60 N·s/m</span>
+                   + F_ff;                      <span class="tok-c">// 前馈力，抵消负载</span>
+tau = J.transpose() * F + g(q);                 <span class="tok-c">// 关节力矩，N·m</span>
+tau = tau.cwiseMax(tau_min).cwiseMin(tau_max);  <span class="tok-c">// 限幅：超限就是失控</span></code></pre>
+
+  <section class="demo" data-demo="fusion" aria-labelledby="demo81-title">
+    <div class="demo-bar">
+      <span class="demo-live"><i aria-hidden="true"></i>Live</span>
+      <h4 class="demo-title" id="demo81-title">一维位置估计：把 IMU 和里程计按增益 K 揉在一起</h4>
+      <span class="demo-tag">Demo 8.1</span>
+    </div>
+    <div class="demo-stage">
+      <canvas id="demo81-canvas" width="880" height="340" role="img" aria-label="一维位置估计对比：上半部分为真值、纯 IMU、纯里程计与融合估计四条位置曲线，下半部分为三条估计相对真值的误差。滑块可调 IMU 零偏、加速度噪声、里程计比例误差与融合增益 K"></canvas>
+    </div>
+    <div class="demo-controls">
+      <label for="demo81-bias">IMU 零偏</label>
+      <input id="demo81-bias" type="range" min="0" max="0.05" step="0.001" value="0.008">
+      <output class="demo-out" id="demo81-bias-out" for="demo81-bias">0.008 m/s²</output>
+      <label for="demo81-noise">加速度噪声</label>
+      <input id="demo81-noise" type="range" min="0" max="0.2" step="0.005" value="0.05">
+      <output class="demo-out" id="demo81-noise-out" for="demo81-noise">0.050 m/s²</output>
+      <label for="demo81-scale">里程计比例误差</label>
+      <input id="demo81-scale" type="range" min="0" max="0.05" step="0.0025" value="0.010">
+      <output class="demo-out" id="demo81-scale-out" for="demo81-scale">1.0%</output>
+      <label for="demo81-gain">融合增益 K</label>
+      <input id="demo81-gain" type="range" min="0.02" max="0.9" step="0.01" value="0.15">
+      <output class="demo-out" id="demo81-gain-out" for="demo81-gain">0.15</output>
+    </div>
+    <dl class="demo-readout">
+      <div><dt>纯 IMU RMSE</dt><dd><span data-readout="imu">—</span><small>cm</small></dd></div>
+      <div><dt>纯里程计 RMSE</dt><dd><span data-readout="leg">—</span><small>cm</small></dd></div>
+      <div><dt>融合 RMSE</dt><dd><span data-readout="fused">—</span><small>cm</small></dd></div>
+      <div><dt>融合终点误差</dt><dd><span data-readout="final">—</span><small>cm</small></dd></div>
+    </dl>
+    <p class="demo-note">读法：「K 太小」位置几乎等于纯 IMU，零偏攒成抛物线；「K 太大」位置被里程计的抖动带跑；中间的 K 才两头占便宜。里程计每 20 ms 报一次位置，带 4 cm 的等效抖动（足端冲击、微滑、腿部形变），再加两次 1.5–2.2 cm 的足滑。<strong>这些参数是教学取值，不是任何一台真机的标定结果。</strong><span data-demo-verdict>融合的 RMSE 应低于任一单独来源，否则说明这一组参数下滤波器已经无能为力。</span></p>
+  </section>
+
+  <h2>把环闭上</h2>
+  <p>这一节解决什么问题：把这一章的六件事折回一条链路，看清每一件的输出交给谁。</p>
+
+  <p>状态估计输出 (p, v, R, b)，交给 05 章的 WBC 当反馈；接触标志同时进状态估计和力分配；高程图输出可通行性与落脚候选，交给 06 章的落脚规划与 MPC；阻抗控制输出关节力矩，走 04 章的 1 kHz 接口；VLA 输出动作块，落在频率阶梯的最顶端。缺任何一环，下游都在用错的数算对的公式。</p>
+
+  <p>有一个数字可以把整章串起来：1° 的姿态误差等于 0.17 m/s² 的假加速度，20 ms 的时间错位在 1.5 m/s 下等于 3 cm 的位置误差，3 cm 的落点误差一步之后放大成 23 cm 的发散量（e<sup>ωT</sup> − 1 = 7.9，取 ω = 3.5 rad/s、T = 0.625 s）。三个数字乘起来，就是「感知差一点」到「摔一跤」的距离。</p>
+
+  <h2>延伸阅读</h2>
+  <p>这一节解决什么问题：给出六篇能直接照着实现的原始文献，按「估计 → 地形 → 操作」排序。</p>
+
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[01]</span>
+      <div>
+        <p class="paper-title">On-Manifold Preintegration for Real-Time Visual-Inertial Odometry</p>
+        <p class="paper-meta">C. Forster 等 · IEEE T-RO, 2017 · 流形上的预积分与零偏雅可比，VIO 的标准组件</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1512.02363">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[02]</span>
+      <div>
+        <p class="paper-title">Contact-Aided Invariant Extended Kalman Filtering for Legged Robot State Estimation</p>
+        <p class="paper-meta">R. Hartley 等 · RSS, 2018 · 把接触写成观测、用不变 EKF 保证可观测性一致</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1805.10410">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[03]</span>
+      <div>
+        <p class="paper-title">VILENS: Visual, Inertial, Lidar, and Leg Odometry for All-Terrain Legged Robots</p>
+        <p class="paper-meta">D. Wisth 等 · IEEE T-RO, 2023 · 四模态因子图，在线估计腿部速度偏置</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2107.07243">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[04]</span>
+      <div>
+        <p class="paper-title">Learning Robust Perceptive Locomotion for Quadrupedal Robots in the Wild</p>
+        <p class="paper-meta">T. Miki 等 · Science Robotics, 2022 · 高程图进策略，野外长距离行走</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2201.08117">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[05]</span>
+      <div>
+        <p class="paper-title">Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware</p>
+        <p class="paper-meta">T. Z. Zhao 等 · RSS, 2023 · ACT：动作分块加 CVAE，50 条示教做精细双臂</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2304.13705">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[06]</span>
+      <div>
+        <p class="paper-title">π0: A Vision-Language-Action Flow Model for General Robot Control</p>
+        <p class="paper-meta">K. Black 等 · RSS, 2025 · 3.3B 视觉语言模型加流匹配动作专家，最高 50 Hz</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2410.24164">arXiv ↗</a>
+    </li>
+  </ol>
+
+  <section class="takeaways" data-takeaways aria-labelledby="ch08-takeaways">
+    <p class="kicker" id="ch08-takeaways">本章要点 <span>Takeaways</span></p>
+    <ol>
+      <li><strong>纯积分是抛物线，不是直线。</strong>0.01 m/s² 的零偏 10 s 就是 0.5 m、60 s 是 18 m，所以 IMU 永远只能做「短时真相」，长时真相必须由外部观测给。</li>
+      <li><strong>融合是分工，不是投票。</strong>IMU 管高频、里程计管低频、视觉管绝对；协方差决定权重，把接触写成零协方差的硬约束会让滤波器过度自信，滑一次就恢复不过来。</li>
+      <li><strong>先把时钟对齐，再谈滤波。</strong>20 ms 在 1.5 m/s 下是 3 cm，是 06 章落点预算的 3 倍；标定一次相机—IMU 偏移能把它压到 1 ms 以内，性价比高于换任何算法。</li>
+      <li><strong>操作的门槛是力不是位置，策略的门槛是频率不是参数。</strong>K<sub>p</sub> 从 2000 降到 200 N/m，同样的 5 cm 侵入从 100 N 降到 10 N；ACT 用 50 条示教在 50 Hz 上跑到 80–90%，靠的是动作块而不是更大的网络。</li>
+    </ol>
+  </section>
+
+  <a class="next-chapter" href="#ch-09">
+    <span class="next-kicker">下一章 · Next</span>
+    <span class="next-title">09｜全栈路线图与经典论文索引</span>
+    <span class="next-arrow" aria-hidden="true">→</span>
+  </a>
+
+  <style>
+    /* 章标题手动控断点：冒号后换行，第二行整句「机器人的眼睛和手」，避免「操/作」被拆开 */
+    #ch-08 .chapter-head h2 .ch-h1-a,
+    #ch-08 .chapter-head h2 .ch-h1-b { display: block; }
+    #ch-08 .chapter-head h2 .ch-h1-a1,
+    #ch-08 .chapter-head h2 .ch-h1-a2 { display: inline; }
+    @media (max-width: 380px) {
+      #ch-08 .chapter-head h2 .ch-h1-a1,
+      #ch-08 .chapter-head h2 .ch-h1-a2 { display: block; }
+    }
+    /* 长公式按组拆行：每组一行、不自动换行，编号在右侧垂直居中 */
+    #ch-08 .formula-block.is-stacked { align-items: center; }
+    #ch-08 .formula-block.is-stacked .formula { text-align: left; white-space: normal; }
+    #ch-08 .formula-block .fx-line { display: block; white-space: nowrap; }
+    #ch-08 .formula-block .fx-line + .fx-line { margin-top: 7px; }
+    #ch-08 .demo-stage canvas { display: block; width: 100%; height: clamp(280px, 38vw, 340px); }
+    @media (max-width: 480px) {
+      #ch-08 .formula-block.is-stacked .formula { font-size: 16px; }
+    }
+    #ch-08 .demo-tag { white-space: nowrap; }
+    #ch-08 .demo-controls {
+      display: grid;
+      grid-template-columns: max-content minmax(80px, 1fr) max-content;
+      gap: 12px 16px;
+      align-items: center;
+    }
+    #ch-08 .demo-controls input[type="range"] { width: 100%; min-width: 0; }
+    #ch-08 .demo-controls .demo-out { min-width: 64px; }
+    #ch-08 .demo-readout { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+    #ch-08 .demo-note {
+      margin: 0; padding: 12px 16px 14px; border-top: 1px solid var(--line);
+      background: var(--paper-2); font-size: 12px; line-height: 1.8; color: var(--muted-ink);
+    }
+    #ch-08 .demo-note strong { color: var(--signal-ink); font-weight: 600; }
+    #ch-08 .demo-note [data-demo-verdict] { display: block; margin-top: 6px; color: var(--accent); }
+    #ch-08 .demo-note [data-demo-verdict].is-warn { color: var(--signal-ink); }
+    #ch-08 .table-wrap td:first-child { white-space: nowrap; }
+  </style>
+</section>

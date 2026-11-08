@@ -1,0 +1,710 @@
+<section class="chapter" id="ch-04" data-chapter="04">
+  <style>
+    /* 仅本章演示使用；所有选择器都以 #ch-04 开头 */
+    #ch-04 .demo-body { display: grid; grid-template-columns: minmax(0, 1fr) 188px; background: var(--surface); }
+    #ch-04 .demo-body > .demo-stage { display: block; min-height: 0; padding: 12px 14px 4px; background-image: none; }
+    #ch-04 .demo-body > .demo-stage canvas { width: 100%; height: 300px; }
+    #ch-04 .demo-body > .demo-hist { padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+    #ch-04 .demo-body > .demo-hist canvas { width: 100%; height: 84px; }
+    #ch-04 .ch04-hist-label { margin: 0 0 4px; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; color: var(--muted-ink); }
+    #ch-04 .demo-body > .demo-readout { grid-column: 2; grid-row: 1 / span 2; grid-template-columns: minmax(0, 1fr); }
+    #ch-04 .demo-body > .demo-readout > div { border-left: 0; border-top: 1px solid rgba(233, 228, 217, .12); }
+    #ch-04 .demo-body > .demo-readout > div:first-child { border-top: 0; }
+    #ch-04 .ch04-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px 20px; align-items: center; }
+    #ch-04 .ch04-ctl { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    #ch-04 .ch04-ctl input[type="range"] { flex: 1 1 80px; min-width: 56px; }
+    #ch-04 .ch04-presets { display: flex; gap: 6px; }
+    #ch-04 .ch04-preset { padding: 6px 10px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); background: var(--paper); border: 1px solid var(--line-2); border-radius: 2px; cursor: pointer; }
+    #ch-04 .ch04-preset:hover { border-color: var(--accent); color: var(--accent); }
+    #ch-04 .ch04-preset[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+    #ch-04 .ch04-note { margin: 0; font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--muted-ink); }
+    /* 表头统一字号：带 .num 的列不再比别的列大一号 */
+    #ch-04 .table-wrap thead th, #ch-04 .table-wrap thead th.num { font-size: 12px; font-weight: 500; letter-spacing: .08em; }
+    /* 点号导数贴在字母正上方：全局 .qdot 的偏移以行高盒子为基准，会飘到上一行 */
+    #ch-04 .qdot, #ch-04 .qddot { line-height: 1; vertical-align: baseline; }
+    #ch-04 .qdot::after, #ch-04 .qddot::after, #ch-04 .qddot::before { top: auto; bottom: .78em; }
+    @media (max-width: 720px) {
+      #ch-04 .demo-body { grid-template-columns: minmax(0, 1fr); }
+      #ch-04 .demo-body > .demo-stage canvas { height: 230px; }
+      #ch-04 .demo-body > .demo-readout { grid-column: 1; grid-row: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #ch-04 .demo-body > .demo-readout > div { border-left: 1px solid rgba(233, 228, 217, .12); }
+      #ch-04 .demo-body > .demo-readout > div:nth-child(odd) { border-left: 0; }
+      #ch-04 .demo-body > .demo-readout > div:nth-child(2) { border-top: 0; }
+      #ch-04 .ch04-controls { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+
+  <header class="chapter-head">
+    <div class="ch-meta">
+      <span class="ch-num" aria-hidden="true">04</span>
+      <p class="kicker">Real-Time Embedded</p>
+    </div>
+    <h2>嵌入式软件：1 kHz 的实时世界</h2>
+    <p class="lede">关节能出多大力矩由硬件决定，能不能在正确的 1 ms 里出，由软件决定。这一章把「准时」拆成可测的量，分配到电流环、全身环、估计与规划四层，再给出一段能跑的 1 kHz 循环骨架和一套降级顺序。</p>
+  </header>
+
+  <p>先看一次具体的迟到。膝关节在摆动相以 3 rad/s 转过 0.5 rad，控制器每 1 ms 更新一次力矩。若第 <span class="formula-inline">k</span> 次指令晚了 1 ms，第 <span class="formula-inline">k+1</span> 个周期开始时关节拿到的还是第 <span class="formula-inline">k−1</span> 拍的数——实际施加的力矩比真实状态落后 2 ms，膝盖已经多转了 0.006 rad，约 0.34°。单次误差能纠正，真正的问题是它随机出现，而稳定性是按最坏延迟设计的。</p>
+
+  <h2>迟 200 µs 损失了什么</h2>
+
+  <p>这一节解决一个问题：把「准时」变成可以写进验收报告的数字。</p>
+
+  <p>实时（real-time）在工程里的定义不是「快」，是「可预测」。任务在截止期（deadline, D）之前完成的概率为 1，叫硬实时（hard real-time）；概率很高但不确定，叫软实时（soft real-time）；结果过期就作废、但系统本身不坏，叫固实时（firm real-time）。视频解码掉一帧是软实时，重放一次就补上；1 kHz 的力矩环掉一拍是硬实时，因为那 1 ms 里关节没有收到新指令。</p>
+
+  <p>描述它的量有四个。控制周期 <span class="formula-inline">T<sub>s</sub></span> 是标称节拍，1 kHz 就是 1000 µs；抖动（jitter, j）是实际触发时刻相对理想栅格的偏差；截止期 <span class="formula-inline">D</span> 是这件事最晚必须完成的时间；最坏执行时间（Worst-Case Execution Time, WCET）是最慢那一条路径花了多久——不是平均，也不是你测到过的最小值。抖动通常写成相对理想栅格的最大偏差：</p>
+
+  <div class="formula-block">
+    <span class="formula">J = max<sub>k</sub> | t<sub>k</sub> − (t<sub>0</sub> + k · T<sub>s</sub>) |</span>
+    <span class="formula-no">4.1</span>
+  </div>
+
+  <p>1 kHz 环的工程目标是抖动小于 5% 周期，即 50 µs；但真正决定成败的是 p99.9 与最大值，不是均值。p99.9 说的是：把 10⁶ 个周期的抖动从大到小排，排在第 99.9% 位的那一个值——每 1000 个周期允许有 1 个超过它。它比 max 稳定（不会被一次偶发事件带跑），比均值诚实（不看被平均掉的长尾）。一个均值 40 µs、最大 900 µs 的系统，在均值上看比一个均值 60 µs、最大 80 µs 的系统漂亮，实际却会周期性击穿截止期——图 4.5 就是这个陷阱的形状。</p>
+
+  <p>回到标题里的数字：晚 200 µs 单独看几乎无害，它损失的是相位裕度。对带宽 <span class="formula-inline">f</span> 的闭环，纯延迟 <span class="formula-inline">T<sub>d</sub></span> 折算成相位滞后约等于：</p>
+
+  <div class="formula-block">
+    <span class="formula">φ<sub>loss</sub> = 360° · f · T<sub>d</sub></span>
+    <span class="formula-no">4.2</span>
+  </div>
+
+  <p>从采样到力矩真正生效，1 kHz 系统的纯延迟通常是 1.5 ms 量级（采样 0.5 ms + 总线 0.5 ms + 伺服 0.5 ms，量级估计）。代入式 4.2，在 10 Hz 处只损失 5.4°，在 100 Hz 处是 54°。再晚 200 µs，100 Hz 处变成 61.2°——正好是相位裕度里最不该动的那几度。而丢掉一整拍的后果是 2.5 ms 延迟、90° 滞后：在 100 Hz 穿越频率上，这等于把反馈接成了正反馈，关节开始叫。所以「晚 200 µs」和「丢 1 ms」不是同一类故障，前者吃掉余量，后者吃掉稳定性。</p>
+
+  <aside class="callout callout--warning" data-reveal>
+    <p class="callout-kicker">警告 <span>Warning</span></p>
+    <p>不要把「平均 1 ms」当成「1 ms 截止」。平均周期永远接近 1000 µs，因为它被设计成这样；会咬人的是 max 与 p99.9。验收时写「抖动 p99.9 &lt; 100 µs，10⁶ 个周期内 max &lt; 300 µs」，不要写「平均周期 1 ms」。</p>
+  </aside>
+
+  <p>多任务能不能都按时，有一套成熟算法。固定优先级、周期任务、截止期等于周期时，Rate-Monotonic（RM）调度把周期短的给高优先级；<a href="https://doi.org/10.1145/321738.321743">Liu 与 Layland 1973 年的原始论文</a>给出了可调度的一个充分条件：利用率不超过</p>
+
+  <div class="formula-block">
+    <span class="formula">U = Σ C<sub>i</sub> / T<sub>i</sub> ≤ n · (2<sup>1/n</sup> − 1) → ln 2 ≈ 0.693</span>
+    <span class="formula-no">4.3</span>
+  </div>
+
+  <p>上界随任务数变化：n=2 是 0.828，n=3 是 0.780，n=4 是 0.757，n 趋于无穷才收敛到 0.693。拿一组真实量级的任务算：全身控制 1 kHz、WCET 420 µs；状态估计 500 Hz、130 µs；总线下发 1 kHz、90 µs；规划 100 Hz、900 µs。利用率 <span class="formula-inline">U</span> = 0.42 + 0.065 + 0.09 + 0.09 = 0.665，离 4 任务上界只剩 92 µs 的 WBC 预算。QP 求解时间从 420 µs 涨到 512 µs，<span class="formula-inline">U</span> 越过 0.757——不是程序跑不起来，是你失去了「它一定跑得完」的证明。</p>
+
+  <p>越过上界不等于一定失败，上界只是充分条件。判断具体某个任务要解响应时间方程：任务 <span class="formula-inline">i</span> 的最坏响应时间等于自身 WCET、被低优先级任务阻塞的时间，加上所有高优先级任务在这段时间里抢占它的次数乘以各自的 WCET。</p>
+
+  <div class="formula-block">
+    <span class="formula">R<sub>i</sub> = C<sub>i</sub> + B<sub>i</sub> + Σ<sub>j∈hp(i)</sub> ⌈R<sub>i</sub> / T<sub>j</sub>⌉ · C<sub>j</sub></span>
+    <span class="formula-no">4.4</span>
+  </div>
+
+  <p>式 4.4 要迭代求解，因为 <span class="formula-inline">R<sub>i</sub></span> 出现在两边。它的工程含义很直接：一次 90 µs 的总线任务插进 420 µs 的 WBC 里，就是 21% 的额外执行时间。所以别把 WCET 当成估计值写进文档——在目标板跑 10⁶ 个周期取最大值，再加 20% 余量，这才是能拿去做可调度性分析的输入。</p>
+
+  <p>把这些数字放回一个周期里，就得到图 4.1。典型的 1 ms 里，收包 90 µs、状态估计 120 µs、全身控制 380 µs、下发 70 µs，剩下 340 µs 余量，占 34%。这个余量听着宽裕，但 QP 求解的一次异常——换一个活跃集、多解一轮——就是 300 µs 量级，余量瞬间掉到 4%，任何一个额外的 50 µs 抖动都会击穿截止期。</p>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 240" role="img" aria-labelledby="ch04-fig1-title ch04-fig1-desc">
+        <title id="ch04-fig1-title">1 kHz 控制周期里的 1 ms 预算分配</title>
+        <desc id="ch04-fig1-desc">两条堆叠横条，横轴为周期内时间 0 到 1000 微秒。典型周期：收包与解包 90 微秒、状态估计 120 微秒、全身控制 380 微秒、下发指令 70 微秒、余量 340 微秒。异常周期：全身控制多花 300 微秒，余量只剩 40 微秒。</desc>
+        <g font-size="12">
+          <line x1="576" y1="34" x2="576" y2="164" style="stroke:var(--signal)" stroke-width="1" stroke-dasharray="3 4"/>
+          <text x="576" y="26" text-anchor="end" style="fill:var(--signal-ink)">截止 1000 µs</text>
+
+          <text x="64" y="72" text-anchor="end" style="fill:var(--ink)">典型</text>
+          <rect x="70" y="52" width="45.5" height="30" style="fill:var(--d1);fill-opacity:.18;stroke:var(--d1)" stroke-width="1.2"/>
+          <rect x="115.5" y="52" width="60.7" height="30" style="fill:var(--d3);fill-opacity:.18;stroke:var(--d3)" stroke-width="1.2"/>
+          <rect x="176.2" y="52" width="192.3" height="30" style="fill:var(--d2);fill-opacity:.18;stroke:var(--d2)" stroke-width="1.2"/>
+          <rect x="368.5" y="52" width="35.4" height="30" style="fill:var(--d5);fill-opacity:.18;stroke:var(--d5)" stroke-width="1.2"/>
+          <rect x="403.9" y="52" width="172.1" height="30" style="fill:none;stroke:var(--line-2)" stroke-width="1" stroke-dasharray="3 3"/>
+          <text x="490" y="72" text-anchor="middle" style="fill:var(--muted-ink)">余量 340 µs（34%）</text>
+
+          <text x="64" y="124" text-anchor="end" style="fill:var(--ink)">异常</text>
+          <rect x="70" y="104" width="45.5" height="30" style="fill:var(--d1);fill-opacity:.18;stroke:var(--d1)" stroke-width="1.2"/>
+          <rect x="115.5" y="104" width="60.7" height="30" style="fill:var(--d3);fill-opacity:.18;stroke:var(--d3)" stroke-width="1.2"/>
+          <rect x="176.2" y="104" width="344.1" height="30" style="fill:var(--d2);fill-opacity:.18;stroke:var(--d2)" stroke-width="1.2"/>
+          <rect x="520.3" y="104" width="35.4" height="30" style="fill:var(--d5);fill-opacity:.18;stroke:var(--d5)" stroke-width="1.2"/>
+          <text x="348" y="124" text-anchor="middle" style="fill:var(--ink-2)">WBC 380 → 680 µs（+300）</text>
+          <path d="M556 138 V148 H576 V138" style="fill:none;stroke:var(--signal)" stroke-width="1"/>
+          <text x="566" y="162" text-anchor="middle" style="fill:var(--signal-ink)">40 µs</text>
+
+          <line x1="70" y1="176" x2="576" y2="176" style="stroke:var(--line-2)" stroke-width="1"/>
+          <g text-anchor="middle" style="fill:var(--muted-ink)">
+            <text x="70" y="192">0</text>
+            <text x="171.2" y="192">200</text>
+            <text x="272.4" y="192">400</text>
+            <text x="373.6" y="192">600</text>
+            <text x="474.8" y="192">800</text>
+            <text x="576" y="192">1000</text>
+          </g>
+          <text x="48" y="192" style="fill:var(--muted-ink)">µs</text>
+
+          <g>
+            <rect x="70" y="200" width="10" height="10" style="fill:var(--d1);fill-opacity:.3;stroke:var(--d1)" stroke-width="1"/>
+            <text x="86" y="209" style="fill:var(--ink-2)">收包/解包 90 µs</text>
+            <rect x="230" y="200" width="10" height="10" style="fill:var(--d3);fill-opacity:.3;stroke:var(--d3)" stroke-width="1"/>
+            <text x="246" y="209" style="fill:var(--ink-2)">状态估计 120 µs</text>
+            <rect x="390" y="200" width="10" height="10" style="fill:var(--d2);fill-opacity:.3;stroke:var(--d2)" stroke-width="1"/>
+            <text x="406" y="209" style="fill:var(--ink-2)">全身 WBC 380 µs</text>
+            <rect x="70" y="220" width="10" height="10" style="fill:var(--d5);fill-opacity:.3;stroke:var(--d5)" stroke-width="1"/>
+            <text x="86" y="229" style="fill:var(--ink-2)">下发指令 70 µs</text>
+            <rect x="230" y="220" width="10" height="10" style="fill:none;stroke:var(--line-2)" stroke-width="1" stroke-dasharray="3 3"/>
+            <text x="246" y="229" style="fill:var(--ink-2)">余量 340 µs</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 4.1</span>1 kHz 控制周期内部的五段时间，横轴为周期内时间 0 到 1000 µs，两条横条分别为典型周期与一次全身控制异常。
+      <span class="fig-note read-for">读者应看出：余量 34% 全部来自「每件事都按 WCET 算」，而 QP 的一次额外迭代就是 300 µs；截止期不是被平均值击穿的，是被单次异常击穿的。</span>
+      <span class="fig-src">来源：作者绘制，分段取值为量级估计（公开系统 14 自由度 QP 均值 0.9 ms，此处取 1 kHz 下的简化分配）。</span>
+    </figcaption>
+  </figure>
+
+  <h2>四个频率，四本时间账</h2>
+
+  <p>这一节解决一个问题：为什么不能把所有计算都塞进 1 kHz，以及每一层到底该分多少时间。</p>
+
+  <p>分层不是习惯，是物理决定的。电流环要跟上 <span class="formula-inline">L/R</span> 约 0.3–1 ms 的电气动态，所以跑在 10–20 kHz；关节与连杆的机械谐振通常在 50–200 Hz，1 kHz 的伺服环留了 5–20 倍余量；整机的倒立摆时间常数是 <span class="formula-inline">√(z<sub>c</sub>/g)</span>，质心高 0.6 m 时等于 0.247 s，1 kHz 对它是 250 倍过采样。反过来说，把视觉规划塞进 1 kHz 不会让它更准，只会让它把 CPU 吃光。</p>
+
+  <p>层与层之间有一条经验规则：内层频率至少是外层的 5–10 倍；公开系统的实测跨度是 2–80 倍。每降一层，接口必须显式定义四件事——目标量、前馈量、增益、以及「这帧数据什么时候过期」。接口里没有时间戳，就等于默许上层用 20 ms 前的规划去驱动 1 ms 的环。图 4.2 把五层画在同一根对数轴上，一眼能看出每层的时间单位差多少。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 4.1 四层控制的时间预算与超时策略（执行时间为量级估计）</caption>
+      <thead>
+        <tr><th>层</th><th class="num">周期</th><th class="num">典型执行</th><th>跑在哪</th><th>超时策略</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>电流环（FOC）</td><td class="num">50–100 µs</td><td class="num">5–15 µs</td><td>关节驱动 MCU / FPGA</td><td>过流由硬件比较器切断，不等上层</td></tr>
+        <tr><td>关节伺服</td><td class="num">0.5–1 ms</td><td class="num">20–60 µs</td><td>驱动板 MCU</td><td>保持上一帧并限流；10 ms 无新帧切阻尼</td></tr>
+        <tr><td>全身控制（WBC）</td><td class="num">1 ms</td><td class="num">200–500 µs</td><td>主控 MCU 或实时核</td><td>沿用上一拍力矩；连续 3 次进 DEGRADED</td></tr>
+        <tr><td>状态估计</td><td class="num">2–10 ms</td><td class="num">100–800 µs</td><td>实时核 / SoC</td><td>按模型外推；超过 20 ms 软停</td></tr>
+        <tr><td>视觉与规划</td><td class="num">10–33 ms</td><td class="num">10–30 ms</td><td>非实时 SoC</td><td>沿用上一次规划；超过 200 ms 停</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>这张表最容易被忽略的是最后一列。内层不知道外层已经死了，它只能按最后一帧执行；所以每一层都必须自己带超时判断，而不是等上层发「我挂了」。工程上三层兜底：单帧丢失用保持，连续 3 帧缺失进降级，10 帧进软停——这三个阈值写在状态机里，不写在注释里。</p>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch04-fig2-title ch04-fig2-desc">
+        <title id="ch04-fig2-title">控制栈五层的频率与周期</title>
+        <desc id="ch04-fig2-desc">横轴为频率，对数刻度，从 10 赫兹到 100 千赫兹。五条横带分别为视觉与规划 30 到 100 赫兹（周期 33 到 10 毫秒）、状态估计 100 到 500 赫兹（10 到 2 毫秒）、全身控制 500 到 1000 赫兹（2 到 1 毫秒）、关节伺服 1000 到 2000 赫兹（1 到 0.5 毫秒）、电流环 10 到 20 千赫兹（100 到 50 微秒）。</desc>
+        <g font-size="12">
+          <g stroke-width="0.8" stroke-dasharray="2 4" style="stroke:var(--line)">
+            <line x1="78" y1="56" x2="78" y2="250"/>
+            <line x1="201" y1="56" x2="201" y2="250"/>
+            <line x1="324" y1="56" x2="324" y2="250"/>
+            <line x1="447" y1="56" x2="447" y2="250"/>
+            <line x1="570" y1="56" x2="570" y2="250"/>
+          </g>
+
+          <text x="72" y="82" text-anchor="end" style="fill:var(--ink)">视觉与规划</text>
+          <rect x="136.7" y="70" width="64.3" height="16" rx="2" style="fill:var(--d3);fill-opacity:.2;stroke:var(--d3)" stroke-width="1.5"/>
+          <text x="209" y="82" style="fill:var(--ink-2)">33–10 ms</text>
+
+          <text x="72" y="120" text-anchor="end" style="fill:var(--ink)">状态估计</text>
+          <rect x="201" y="108" width="86.1" height="16" rx="2" style="fill:var(--d5);fill-opacity:.2;stroke:var(--d5)" stroke-width="1.5"/>
+          <text x="295" y="120" style="fill:var(--ink-2)">10–2 ms</text>
+
+          <text x="72" y="158" text-anchor="end" style="fill:var(--ink)">全身控制</text>
+          <rect x="287.1" y="146" width="36.9" height="16" rx="2" style="fill:var(--d1);fill-opacity:.2;stroke:var(--d1)" stroke-width="1.5"/>
+          <text x="332" y="158" style="fill:var(--ink-2)">2–1 ms</text>
+
+          <text x="72" y="196" text-anchor="end" style="fill:var(--ink)">关节伺服</text>
+          <rect x="324" y="184" width="37" height="16" rx="2" style="fill:var(--d2);fill-opacity:.2;stroke:var(--d2)" stroke-width="1.5"/>
+          <text x="369" y="196" style="fill:var(--ink-2)">1–0.5 ms</text>
+
+          <text x="72" y="234" text-anchor="end" style="fill:var(--ink)">电流环</text>
+          <rect x="447" y="222" width="36.9" height="16" rx="2" style="fill:var(--d4);fill-opacity:.2;stroke:var(--d4)" stroke-width="1.5"/>
+          <text x="492" y="234" style="fill:var(--ink-2)">100–50 µs</text>
+
+          <line x1="78" y1="250" x2="570" y2="250" style="stroke:var(--line-2)" stroke-width="1"/>
+          <g text-anchor="middle" style="fill:var(--muted-ink)">
+            <text x="78" y="268">10 Hz</text>
+            <text x="201" y="268">100 Hz</text>
+            <text x="324" y="268">1 kHz</text>
+            <text x="447" y="268">10 kHz</text>
+            <text x="570" y="268">100 kHz</text>
+          </g>
+          <text x="78" y="290" style="fill:var(--muted-ink)">频率（对数刻度）· 相邻层的频率比通常为 2–80 倍</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 4.2</span>控制栈五层的频率与对应周期，纵轴按层排列、横轴为对数频率，右侧标注每层一个周期有多长。
+      <span class="fig-note read-for">读者应看出：从电流环到视觉规划跨越三个数量级，每一层的时间单位都不同——用毫秒讨论视觉、或用微秒讨论规划，都是错位。</span>
+      <span class="fig-src">来源：作者绘制，数值取自表 4.1 与公开系统报道（Kim 2019、Grimminger 2020）。</span>
+    </figcaption>
+  </figure>
+
+  <h3>三个真实系统怎么切</h3>
+
+  <p>MIT Cheetah 系列的切法是把刚度环推到最靠近编码器的地方：关节 PD 跑 40 kHz，全身控制 0.5 kHz，MPC 40 Hz，<a href="https://arxiv.org/abs/1909.06586">论文</a>原话是「40 kHz，比全身控制快 80 倍」。理由很实际——总线再快也有 0.5–1 ms 延迟，把高频环放在电机驱动器上，等于把延迟从回路里删掉，比在控制律里补偿它便宜得多。</p>
+
+  <p>ANYmal 一脉把这套思路开源成了 <a href="https://arxiv.org/abs/1910.00093">ODRI 模块</a>：关节驱动板上 10 kHz 的 FOC，主控 1 kHz 闭环 12 个自由度，关节内走 SPI、整机走 CAN。代价写在论文里：8 B 的经典 CAN 帧在 1 Mbit/s 下要 111–135 µs，1 ms 只装得下 7–9 帧，所以高频段绝不能压在 CAN 上——这条带宽墙是架构级的，加节点救不了。</p>
+
+  <p>Unitree 的 low-level 接口是第三种切法：一条 LowCmd 给每个关节槽位带 q、dq、kp、kd、τ 五个 float，30 余个槽位约 700 B，按 500 Hz–1 kHz 通过 DDS 下发；更高层的 sport mode 只给速度指令，跑 50–100 Hz。它把实时性压进关节驱动器，主控只负责「别断流」，所以这条链路本质上是软实时的，靠关节端的保持与斜坡限幅兜底。</p>
+
+  <p>这一章交给第 05 章的接口只有一个：每 1 ms 一组 <span class="formula-inline">(q, <span class="qdot">q</span>, τ, 接触标志)</span> 加时间戳。晚到的数据要么丢弃、要么按模型外推，绝不能默默当成新的——这是后面所有控制算法成立的前提。</p>
+
+  <h2>64 字节里塞什么</h2>
+
+  <p>这一节解决一个问题：一条总线在 1 ms 内到底能运多少关节的数据。</p>
+
+  <p>CAN FD 的提速只发生在数据段：仲裁段仍然不超过 1 Mbit/s，数据段可以到 5–8 Mbit/s，单帧载荷 64 B。一帧的时间是两段之和：</p>
+
+  <div class="formula-block">
+    <span class="formula">t<sub>f</sub> = N<sub>arb</sub> / R<sub>arb</sub> + N<sub>data</sub> / R<sub>data</sub></span>
+    <span class="formula-no">4.5</span>
+  </div>
+
+  <p>代入 64 B、1 Mbit/s 仲裁、5 Mbit/s 数据段，并给填充位留 12% 余量，得到约 156 µs——与公开资料的 135–160 µs 一致。算总账：30 个关节、每毫秒一帧指令加一帧状态，就是 60 帧；60 × 156 µs = 9.4 ms，是 1 ms 周期的 9.4 倍。就算把数据段提到 8 Mbit/s 压到 116 µs，也要 7 ms。结论很硬：单条 CAN FD 装不下 30 关节的 1 kHz 全状态，这不是调参问题。图 4.3 把两种总线的 1 ms 摆在一起对比。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 4.2 一帧 64 B CAN FD 的典型字段分配（单关节，状态方向）</caption>
+      <thead>
+        <tr><th>字段</th><th class="num">字节</th><th>编码</th><th class="num">分辨率 / 量程</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>关节位置 q</td><td class="num">4</td><td>int32 补码</td><td class="num">1 µrad / ±2147 rad</td></tr>
+        <tr><td>关节速度 q̇</td><td class="num">2</td><td>int16 补码</td><td class="num">0.01 rad/s / ±327 rad/s</td></tr>
+        <tr><td>输出力矩 τ</td><td class="num">2</td><td>int16 补码</td><td class="num">0.01 N·m / ±327 N·m</td></tr>
+        <tr><td>q 轴电流</td><td class="num">2</td><td>int16 补码</td><td class="num">0.01 A / ±327 A</td></tr>
+        <tr><td>温度（MOS / 绕组）</td><td class="num">2</td><td>int8 × 2</td><td class="num">1 °C / −40…127 °C</td></tr>
+        <tr><td>母线电压</td><td class="num">2</td><td>uint16</td><td class="num">0.01 V / 0–655 V</td></tr>
+        <tr><td>错误码</td><td class="num">2</td><td>uint16 位域</td><td class="num">16 个独立标志位</td></tr>
+        <tr><td>采样时间戳</td><td class="num">2</td><td>uint16</td><td class="num">1 µs / 65.5 ms 回绕</td></tr>
+        <tr><td>模式与使能</td><td class="num">1</td><td>uint8</td><td class="num">8 种状态</td></tr>
+        <tr><td>CRC-16</td><td class="num">2</td><td>查表</td><td class="num">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>合计 21 B，一帧 64 B 还剩 43 B，够再放一组编码器或一个力传感器。但按最小集算——位置 4 B、速度 2 B、力矩 2 B、温度 1 B、错误码 1 B，每关节 10 B——一帧只装得下 6 个关节。30 个关节要 5 帧、780 µs，只剩 220 µs 给指令方向，还没算仲裁与排队。实践中总线负载超过 50% 就开始出现排队延迟，按这个标准，单条 CAN FD 的经济上限是每毫秒 3 帧：按状态方向算约 18 个关节（3 帧 × 6 关节）；若每个关节的指令与状态各占一帧，同样的 3 帧只够 9 个关节双向。</p>
+
+  <p>EtherCAT 走的是相反的路：一条报文穿过所有从站，每个从站在报文经过时读写属于自己的那一段。PDO（Process Data Object）映射把 30 个关节的 q、dq、τ 映射到一段连续的 process data，主站每个周期读写同一块内存，不需要为每个关节单独组帧；分布式时钟（Distributed Clock, DC）让所有从站用同一个时钟采样，抖动小于 1 µs，最小周期可以做到 100 µs 以下。代价是要专用从站控制器和真正实时的主站（<a href="https://github.com/OpenEtherCATsociety/SOEM">SOEM</a> 或 lely 跑在 PREEMPT_RT 或裸机上），布线从一条总线变成环或树，描述文件（ESI）也比 CAN 的 DBC 重得多。</p>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 264" role="img" aria-labelledby="ch04-fig3-title ch04-fig3-desc">
+        <title id="ch04-fig3-title">CAN FD 与 EtherCAT 在 1 毫秒内的总线时序</title>
+        <desc id="ch04-fig3-desc">横轴为时间 0 到 1000 微秒。上半部分为 6 个独立 CAN FD 帧首尾相接，每帧 145 微秒，共约 870 微秒；下半部分为一条 EtherCAT 报文穿过 30 个从站，约 60 微秒，其余 940 微秒总线空闲。</desc>
+        <g font-size="12">
+          <line x1="580" y1="18" x2="580" y2="170" style="stroke:var(--signal)" stroke-width="1" stroke-dasharray="3 4"/>
+          <text x="580" y="14" text-anchor="end" style="fill:var(--signal-ink)">截止 1000 µs</text>
+
+          <text x="60" y="36" style="fill:var(--ink)">CAN FD：6 个关节 = 6 帧串行，每帧 145 µs</text>
+          <g>
+            <rect x="60" y="44" width="75.4" height="20" style="fill:var(--d2);fill-opacity:.2;stroke:var(--d2)" stroke-width="1.5"/>
+            <rect x="135.4" y="44" width="75.4" height="20" style="fill:var(--d2);fill-opacity:.2;stroke:var(--d2)" stroke-width="1.5"/>
+            <rect x="210.8" y="44" width="75.4" height="20" style="fill:var(--d2);fill-opacity:.2;stroke:var(--d2)" stroke-width="1.5"/>
+            <rect x="286.2" y="44" width="75.4" height="20" style="fill:var(--d2);fill-opacity:.2;stroke:var(--d2)" stroke-width="1.5"/>
+            <rect x="361.6" y="44" width="75.4" height="20" style="fill:var(--d2);fill-opacity:.2;stroke:var(--d2)" stroke-width="1.5"/>
+            <rect x="437" y="44" width="75.4" height="20" style="fill:var(--d2);fill-opacity:.2;stroke:var(--d2)" stroke-width="1.5"/>
+          </g>
+          <g text-anchor="middle" style="fill:var(--ink-2)">
+            <text x="97.7" y="58">J1</text>
+            <text x="173.1" y="58">J2</text>
+            <text x="248.5" y="58">J3</text>
+            <text x="323.9" y="58">J4</text>
+            <text x="399.3" y="58">J5</text>
+            <text x="474.7" y="58">J6</text>
+          </g>
+          <text x="60" y="82" style="fill:var(--signal-ink)">J7…J30 还要 24 帧 = 3.5 ms，是窗口的 3.5 倍</text>
+
+          <text x="60" y="116" style="fill:var(--ink)">EtherCAT：30 个从站 = 1 个报文</text>
+          <rect x="60" y="124" width="31.2" height="20" style="fill:var(--d1);fill-opacity:.24;stroke:var(--d1)" stroke-width="1.5"/>
+          <text x="99" y="138" style="fill:var(--ink-2)">≈60 µs（每个从站转发约 1 µs）</text>
+          <text x="330" y="138" style="fill:var(--muted-ink)">总线空闲 940 µs，占周期 94%</text>
+
+          <line x1="60" y1="176" x2="580" y2="176" style="stroke:var(--line-2)" stroke-width="1"/>
+          <g text-anchor="middle" style="fill:var(--muted-ink)">
+            <text x="60" y="192">0</text>
+            <text x="164" y="192">200</text>
+            <text x="268" y="192">400</text>
+            <text x="372" y="192">600</text>
+            <text x="476" y="192">800</text>
+            <text x="580" y="192">1000</text>
+          </g>
+          <text x="60" y="212" style="fill:var(--muted-ink)">时间 / µs · 一个 1 ms 周期</text>
+
+          <text x="60" y="234" style="fill:var(--ink-2)">CAN FD：60 帧 × 156 µs = 9.4 ms，差 9.4 倍</text>
+          <text x="60" y="252" style="fill:var(--ink-2)">EtherCAT：报文 60 µs，占用 6%</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 4.3</span>同样 1 ms 窗口内，6 个关节的 CAN FD 帧已经吃掉 870 µs，而 30 个从站的 EtherCAT 报文只占 60 µs。
+      <span class="fig-note read-for">读者应看出：CAN 的负载随关节数线性增长（每关节 +145 µs），EtherCAT 近似常数（每从站 +1 µs）；两者的差距是 100 倍量级，不是「快一点」。</span>
+      <span class="fig-src">来源：作者按式 4.5 估算，帧时间取 145 µs（1 Mbit/s 仲裁 + 5 Mbit/s 数据段）。</span>
+    </figcaption>
+  </figure>
+
+  <p>丢帧的处理只有三种，且必须显式选一种。保持（zero-order hold）最简单，代价是额外 1 ms 延迟——对 100 Hz 的环就是 36° 相位，所以「只丢一帧、保持一下」在 1 kHz 上不是无损操作。插值（用上一帧斜率外推）只建议放在估计层，控制层外推会把噪声放大成力矩抖动。降级是唯一能保证不发散的手段：连续 3 帧缺失进 DEGRADED，10 帧进软停。工程上三者叠加使用，而不是三选一。</p>
+
+  <h2>从裸机到 PREEMPT_RT</h2>
+
+  <p>这一节解决一个问题：代码凭什么保证在 1 ms 内跑完。</p>
+
+  <p>四个选项，取舍是确定性换生态。裸机加定时器中断最确定：中断延迟 1–5 µs，没有调度器、没有页表、没有其他线程，代码路径就是你写的那几条；代价是什么都要自己写，网络栈、文件系统、调试手段全部自备。多数关节驱动器停在这里，因为它只需要做一件事。</p>
+
+  <p>FreeRTOS 在中间：5–20 µs 的唤醒延迟，固定优先级抢占，静态分配内存，能给你可分析的调度。代价是生态小、工具链弱，优先级反转要靠带继承的互斥量自己防。</p>
+
+  <p>PREEMPT_RT 把内核里几乎所有的自旋锁换成可抢占的 rtmutex、把中断线程化，尾延迟从毫秒级降到几十微秒：x86 桌面 10–100 µs，ARM SoC 50–500 µs（含驱动，量级估计）。它降低的是尾延迟，不给 WCET 保证——缺页、SMI、缓存争用、驱动里的关中断区仍然存在，<a href="https://doi.org/10.1145/3297714">Reghenzani 等的综述</a>逐项量过这些机制。把它当成「硬实时」是这一行最常见的误判。Xenomai 与 EVL 用双内核或 Dovetail 接管中断，能到 10–50 µs，代价是内核版本绑定、驱动要移植。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 4.3 四种运行时的取舍（延迟为量级估计，必须在你自己的板子上实测）</caption>
+      <thead>
+        <tr><th>方案</th><th class="num">最坏唤醒延迟</th><th>能否给出 WCET 保证</th><th>主要代价</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>裸机 + 定时器中断</td><td class="num">1–5 µs</td><td>能，靠测量加静态分析</td><td>无 OS 服务，全部手写</td></tr>
+        <tr><td>FreeRTOS</td><td class="num">5–20 µs</td><td>能，固定优先级可分析</td><td>生态小，调试工具弱</td></tr>
+        <tr><td>PREEMPT_RT</td><td class="num">10–500 µs</td><td>不能，只有统计尾延迟</td><td>缺页与固件仍会插队</td></tr>
+        <tr><td>Xenomai / EVL</td><td class="num">10–50 µs</td><td>接近，域隔离</td><td>内核版本绑定，驱动移植</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>三个坑与选型无关，换什么系统都会遇到。第一是优先级反转：低优先级任务持锁、中优先级任务抢占、高优先级任务等锁，此时高优先级被中优先级无限期拖住。<a href="https://doi.org/10.1109/12.57058">Sha 等在 1990 年给出的优先级继承</a>把阻塞上界压到一个临界区——没有继承时，高优先级可能被一次 3 ms 的日志压缩拖住；有继承时，最坏阻塞不超过临界区的 12 µs。第二是缺页：一次 major page fault 是 0.1–10 ms，在 1 kHz 环里等于 1–10 个周期，所以控制进程要 mlockall、所有缓冲预分配、启动时把每条路径先跑一遍预热。第三是分配：控制环里任何一次 new 或字符串拼接都可能触发 brk/mmap，把 1 ms 变成 5 ms。</p>
+
+  <aside class="callout callout--field" data-reveal>
+    <p class="callout-kicker">工程经验 <span>Field Note</span></p>
+    <p>先量，再选。同一块 ARM 板，cyclictest 空载 max 可能是 60 µs，接上相机驱动后变成 400 µs，插上 USB 调试线再变成 2 ms。选型依据必须是「目标负载下的 max」，不是芯片手册上的核数。</p>
+  </aside>
+
+  <p>ROS 2 默认不适合 1 kHz，原因不在 DDS 本身，而在三处：发现与序列化的开销、executor 的轮询语义（每个调度窗口对每个订阅只取一个事件），以及随时可能发生的内存分配。Casini 等<a href="https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ECRTS.2019.6">在 2019 年</a>给这套语义建了调度模型，才能算出端到端响应时间——换句话说，ROS 2 的实时性必须靠分析得到，不能靠默认配置得到。</p>
+
+  <h2>1 kHz 循环长什么样</h2>
+
+  <p>这一节解决一个问题：把上面的约束写成一段能编译、能验收的循环。</p>
+
+  <p>五条规则，按重要性排序。一，单线程主循环加定时器触发，不用 <code>while(1)</code> 加 sleep——sleep 的唤醒误差就是抖动。二，每个阶段有预算，超预算记一次 miss 并继续，而不是阻塞等待。三，所有内存在启动时分配，运行期零 malloc。四，控制环只写环形缓冲，不读、不打日志、不碰文件。五，用状态机代替 if-else，每个转移都有可测量的触发条件和超时。</p>
+
+  <p>状态机通常五态：IDLE 等自检，CALIB 写零位，RUN 正常闭环，DEGRADED 限速保持，FAULT 断输出。每次转移的触发条件必须是测量量——连续丢帧数、跟随误差、母线电压、看门狗计数——不能是「感觉不对」。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 290" role="img" aria-labelledby="ch04-fig4-title ch04-fig4-desc">
+        <title id="ch04-fig4-title">控制环的五态状态机与转移条件</title>
+        <desc id="ch04-fig4-desc">五个状态：待机、标定、运行、降级、故障。待机经自检通过进入标定，标定经零位写入进入运行；运行连续三帧超时进入降级，降级一百帧无错回到运行；运行遇到急停、过流或看门狗进入故障；降级在跟随误差超过 0.1 弧度时进入故障；故障需要人工复位并重新标定才回到待机。</desc>
+        <defs>
+          <marker id="ch04-fig4-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d2)"/>
+          </marker>
+        </defs>
+        <g font-size="12">
+          <g style="fill:var(--surface);stroke:var(--line-2)" stroke-width="1.5">
+            <rect x="36" y="44" width="110" height="32" rx="3"/>
+            <rect x="176" y="44" width="110" height="32" rx="3"/>
+            <rect x="316" y="44" width="110" height="32" rx="3"/>
+            <rect x="316" y="134" width="110" height="32" rx="3"/>
+            <rect x="450" y="134" width="110" height="32" rx="3"/>
+          </g>
+          <g text-anchor="middle" style="fill:var(--ink)">
+            <text x="91" y="64">IDLE 待机</text>
+            <text x="231" y="64">CALIB 标定</text>
+            <text x="371" y="64">RUN 运行</text>
+            <text x="371" y="154">DEGRADED 降级</text>
+            <text x="505" y="154">FAULT 故障</text>
+          </g>
+          <g style="stroke:var(--d2)" stroke-width="1.3" fill="none">
+            <line x1="146" y1="60" x2="174" y2="60" marker-end="url(#ch04-fig4-arrow)"/>
+            <line x1="286" y1="60" x2="314" y2="60" marker-end="url(#ch04-fig4-arrow)"/>
+            <line x1="371" y1="76" x2="371" y2="132" marker-end="url(#ch04-fig4-arrow)"/>
+            <line x1="349" y1="134" x2="349" y2="78" marker-end="url(#ch04-fig4-arrow)"/>
+            <path d="M426 60 H505 V132" marker-end="url(#ch04-fig4-arrow)"/>
+            <line x1="426" y1="150" x2="448" y2="150" marker-end="url(#ch04-fig4-arrow)"/>
+            <path d="M505 166 V246 H91 V78" stroke-dasharray="4 4" marker-end="url(#ch04-fig4-arrow)"/>
+          </g>
+          <g style="fill:var(--muted-ink)">
+            <text x="160" y="36" text-anchor="middle">自检通过</text>
+            <text x="300" y="36" text-anchor="middle">零位写入</text>
+            <text x="380" y="104">连续 3 帧超时</text>
+            <text x="342" y="104" text-anchor="end">100 帧无错</text>
+            <text x="432" y="36">急停 / 过流 / 看门狗</text>
+            <line x1="437" y1="176" x2="437" y2="154" fill="none" stroke="var(--line-2)" stroke-width="0.8"/>
+            <text x="437" y="188" text-anchor="middle">误差 &gt; 0.1 rad</text>
+            <text x="300" y="238" text-anchor="middle">人工复位 + 重新标定</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 4.4</span>五态状态机：正常链路是 IDLE→CALIB→RUN，异常链路是 RUN→DEGRADED→FAULT，虚线是唯一需要人工介入的转移。
+      <span class="fig-note read-for">读者应看出：降级不是终点而是双向节点，恢复与恶化各有明确阈值；FAULT 只能人工复位，因为软件无法确认「人已经排除故障」。</span>
+      <span class="fig-src">来源：作者绘制，阈值为量级建议。</span>
+    </figcaption>
+  </figure>
+
+  <p>双缓冲解决的是「发布」问题：控制环写背面缓冲，一次原子写把索引翻到背面，读侧永远看到完整的一帧，不会读到更新到一半的数据。无锁队列解决的是「回传」问题：单生产者单消费者（SPSC）的环形队列不需要任何原子比较交换，生产者只推进 head、消费者只推进 tail；一旦变成多生产者，就得用 CAS，成本高一个数量级。看门狗的顺序有讲究——先喂狗再干活，否则一个卡死的循环会被误判成正常运行；窗口看门狗更进一步，要求喂狗落在时间窗内，能抓住「跑太快」，比如中断被重复触发。</p>
+
+  <pre data-lang="cpp"><code><span class="tok-c">// 1 kHz 主环骨架：单线程、零堆分配、每步有预算。wbc_solve 只留接口。</span>
+<span class="tok-k">struct</span> JointCmd { <span class="tok-k">float</span> q, dq, kp, kd, tau; uint32_t seq; };
+
+<span class="tok-k">static</span> JointCmd buf_a[NJ], buf_b[NJ];   <span class="tok-c">// 双缓冲：背面写，正面读</span>
+<span class="tok-k">static</span> std::atomic&lt;<span class="tok-k">int</span>&gt; front{0};        <span class="tok-c">// 0 表示 buf_a 是正面</span>
+<span class="tok-k">static</span> BlackBox&lt;1000&gt; box;             <span class="tok-c">// 预分配环形缓冲，存 1 s 历史</span>
+<span class="tok-k">static</span> <span class="tok-k">int</span> miss_run = 0, degraded_cnt = 0;
+
+<span class="tok-k">void</span> control_1khz() {                    <span class="tok-c">// 由 TIM6 更新中断触发，T = 1000 µs</span>
+  <span class="tok-k">const</span> uint32_t t0 = DWT-&gt;CYCCNT;
+  <span class="tok-k">if</span> (state != FAULT) kick_window_watchdog();  <span class="tok-c">// 先喂狗：喂早了也记错</span>
+
+  JointState rx[NJ];
+  <span class="tok-k">const</span> <span class="tok-k">int</span> n = bus.recv_all(rx, <span class="tok-c">/*timeout=*/</span>0);  <span class="tok-c">// 非阻塞，不等到齐</span>
+
+  <span class="tok-k">switch</span> (state) {
+  <span class="tok-k">case</span> IDLE:
+    <span class="tok-k">if</span> (n == NJ &amp;&amp; self_check(rx)) state = CALIB;
+    <span class="tok-k">break</span>;
+  <span class="tok-k">case</span> CALIB:
+    <span class="tok-k">if</span> (calib_step(rx)) { zero_offsets(); state = RUN; }
+    <span class="tok-k">break</span>;
+  <span class="tok-k">case</span> RUN: {
+    <span class="tok-k">if</span> (n &lt; NJ) {                       <span class="tok-c">// 输入不全：不发新帧，关节端保持上一帧</span>
+      <span class="tok-k">if</span> (++miss_run &gt;= 3) state = DEGRADED;
+      <span class="tok-k">break</span>;
+    }
+    miss_run = 0;
+    <span class="tok-k">const</span> <span class="tok-k">int</span> back = front.load(std::memory_order_acquire) ^ 1;
+    JointCmd* w = (back == 0) ? buf_a : buf_b;       <span class="tok-c">// 只写背面</span>
+    wbc_solve(rx, w);                                <span class="tok-c">// 预算 400 µs，内部分配为零</span>
+    <span class="tok-k">for</span> (<span class="tok-k">int</span> i = 0; i &lt; NJ; ++i) w[i].seq = ++seq;
+    front.store(back, std::memory_order_release);    <span class="tok-c">// 一次原子写完成发布</span>
+    bus.send_all(w);                                 <span class="tok-c">// 预算 100 µs</span>
+    <span class="tok-k">break</span>;
+  }
+  <span class="tok-k">case</span> DEGRADED:
+    bus.send_hold();                                 <span class="tok-c">// 保持上一帧并限速</span>
+    <span class="tok-k">if</span> (++degraded_cnt &gt; 100) state = RUN;
+    <span class="tok-k">if</span> (follow_err(rx) &gt; 0.1f) state = FAULT;
+    <span class="tok-k">break</span>;
+  <span class="tok-k">case</span> FAULT:
+    bus.disable_all();                               <span class="tok-c">// 不写 flash，不阻塞</span>
+    <span class="tok-k">break</span>;
+  }
+
+  <span class="tok-k">const</span> uint32_t dt = DWT-&gt;CYCCNT - t0;             <span class="tok-c">// 单位：CPU 周期</span>
+  box.push({micros(), cycles_to_us(dt), state, n});  <span class="tok-c">// 只写环形缓冲</span>
+  <span class="tok-k">if</span> (cycles_to_us(dt) &gt; 1000) ++overruns;          <span class="tok-c">// 记一次 deadline miss</span>
+}</code></pre>
+
+  <p>这段骨架里有三处值得单独说。第一，<code>front.store</code> 用 release、<code>front.load</code> 用 acquire，保证背面缓冲的写入在索引翻转前对读侧可见；用 relaxed 会得到一个「索引翻了、数据还没到」的窗口。第二，RUN 里丢帧只累加 <code>miss_run</code> 而不重试，因为重试会把 1 ms 变成 2 ms；恢复条件是连续三帧齐全，不是「下一帧好了就回去」。第三，FAULT 分支不写日志，因为 flash 写入可能阻塞几十毫秒——要记的东西前面已经进了环形缓冲。</p>
+
+  <p>环形缓冲用单生产者单消费者就够，因为写日志的只有控制环一个线程：</p>
+
+  <pre data-lang="cpp"><code><span class="tok-c">// 单生产者/单消费者环形队列：控制环只写，遥测线程只读，无锁</span>
+<span class="tok-k">template</span> &lt;<span class="tok-k">size_t</span> N&gt;
+<span class="tok-k">struct</span> BlackBox {
+  Record buf[N];                          <span class="tok-c">// 启动时一次分配，运行期不 new</span>
+  std::atomic&lt;uint32_t&gt; head{0};          <span class="tok-c">// 只有控制环写</span>
+  std::atomic&lt;uint32_t&gt; tail{0};          <span class="tok-c">// 只有遥测线程写</span>
+
+  <span class="tok-k">void</span> push(<span class="tok-k">const</span> Record&amp; r) {          <span class="tok-c">// 覆盖最旧：黑匣子允许丢最老的一条</span>
+    uint32_t h = head.load(std::memory_order_relaxed);
+    buf[h % N] = r;
+    head.store(h + 1, std::memory_order_release);
+  }
+
+  <span class="tok-k">bool</span> pop(Record&amp; r) {                    <span class="tok-c">// 消费者落后超过一圈就跳过</span>
+    uint32_t t = tail.load(std::memory_order_relaxed);
+    uint32_t h = head.load(std::memory_order_acquire);
+    <span class="tok-k">if</span> (h - t &gt; N) { t = h - N; tail.store(t, std::memory_order_relaxed); }
+    <span class="tok-k">if</span> (t == h) <span class="tok-k">return</span> <span class="tok-k">false</span>;
+    r = buf[t % N];
+    tail.store(t + 1, std::memory_order_relaxed);
+    <span class="tok-k">return</span> <span class="tok-k">true</span>;
+  }
+};</code></pre>
+
+  <p>最后用一段 Python 把这一章的三个数算一遍。改掉里面的 WCET 和帧长，就是你自己系统的预算表：</p>
+
+  <pre data-lang="python"><code><span class="tok-c"># 三个数字决定架构：CPU 利用率、相位损失、总线负载</span>
+T = <span class="tok-n">1000</span>                                    <span class="tok-c"># µs，1 kHz 周期</span>
+tasks = [(<span class="tok-s">"WBC"</span>, <span class="tok-n">420</span>, <span class="tok-n">1000</span>), (<span class="tok-s">"估计"</span>, <span class="tok-n">130</span>, <span class="tok-n">2000</span>),
+         (<span class="tok-s">"下发"</span>, <span class="tok-n">90</span>, <span class="tok-n">1000</span>), (<span class="tok-s">"规划"</span>, <span class="tok-n">900</span>, <span class="tok-n">10000</span>)]
+U = <span class="tok-f">sum</span>(c / p <span class="tok-k">for</span> _, c, p <span class="tok-k">in</span> tasks)          <span class="tok-c"># 0.665</span>
+n = <span class="tok-f">len</span>(tasks)
+bound = n * (<span class="tok-n">2</span> ** (<span class="tok-n">1</span> / n) - <span class="tok-n">1</span>)            <span class="tok-c"># n=4 → 0.757</span>
+<span class="tok-f">print</span>(<span class="tok-s">f"U={U:.3f} 上界={bound:.3f} 余量={(bound-U)*T:.0f} µs"</span>)
+
+<span class="tok-k">def</span> <span class="tok-f">phase_loss</span>(f_hz, delay_us):          <span class="tok-c"># 式 4.2</span>
+    <span class="tok-k">return</span> <span class="tok-n">360</span> * f_hz * delay_us * <span class="tok-n">1e-6</span>
+
+<span class="tok-k">for</span> f <span class="tok-k">in</span> (<span class="tok-n">10</span>, <span class="tok-n">100</span>):                        <span class="tok-c"># 1.5 ms 与再加 200 µs</span>
+    <span class="tok-f">print</span>(<span class="tok-s">f"{f:&gt;3} Hz: {phase_loss(f,1500):5.1f}° → {phase_loss(f,1700):5.1f}°"</span>)
+
+<span class="tok-k">def</span> <span class="tok-f">canfd_us</span>(nbytes, arb=<span class="tok-n">1.0</span>, data=<span class="tok-n">5.0</span>):   <span class="tok-c"># 式 4.5，单位 Mbit/s</span>
+    arb_phase = <span class="tok-n">24</span> / arb                 <span class="tok-c"># 仲裁段约 24 位（含填充）</span>
+    data_phase = (nbytes * <span class="tok-n">8</span> * <span class="tok-n">1.12</span> + <span class="tok-n">21</span>) / data
+    <span class="tok-k">return</span> arb_phase + data_phase + <span class="tok-n">13</span> / arb
+
+tf = <span class="tok-f">canfd_us</span>(<span class="tok-n">64</span>)
+<span class="tok-f">print</span>(<span class="tok-s">f"64 B 帧 = {tf:.0f} µs，1 ms 内 {1000 // tf:.0f} 帧"</span>)</code></pre>
+
+  <h2>ROS 2 的位置</h2>
+
+  <p>这一节解决一个问题：既然 ROS 2 不实时，人形机器人为什么还在用它。</p>
+
+  <p>因为它擅长的部分根本不需要实时。合理的切分是三段：MCU 跑 1–20 kHz 的硬实时环；可选的实时核跑 1 kHz 的全身控制；SoC 上的 ROS 2 做感知、规划、日志、可视化，频率在 100 Hz 以下。判断标准不是「哪个框架好」，而是「这条链路断了，机器人会不会倒」——会倒的必须留在 MCU 上。</p>
+
+  <p>QoS 是第一道要改的默认值。1 kHz 的状态流应当用 BEST_EFFORT 加 KEEP_LAST(1)：旧数据没有价值，重传只会把队列拉长。RELIABLE 加 depth=10 在 1 kHz 下意味着最多 10 ms 的陈旧数据，接收端还会以为自己在读实时值。deadline 与 liveliness 用来检测上游是不是还活着，比在应用层写心跳更省事。第二道是 executor：单线程 executor 串行执行所有回调，一个慢回调拖住全部话题；多线程 executor 又引入锁竞争。Casini 的工作说明，这类系统的响应时间必须按「每个窗口每个源取一个事件」建模，不能按队列长度估。</p>
+
+  <p>ros2_control 是另一层：它的 hardware_interface 用 read / update / write 三拍把硬件抽象成状态与命令接口，controller_manager 默认 100 Hz，可配到 1 kHz。它解决的是「换硬件不用改控制器」，不是「保证准时」——把 1 kHz 环挂上去，你得到的是可替换性，代价是把实时性交给了 Linux 调度器。</p>
+
+  <p>正确做法是让 ROS 2 当监督者：以 50–100 Hz 发目标、以 1 kHz 收状态（只用于记录与监控），MCU 自己跑 1 kHz，并在 50 ms 收不到新目标时进入保持。ROS 2 挂了，机器人应该站着，而不是跟着挂。这条规则要写进验收测试：直接 <code>kill -9</code> 掉主控进程，看机器人是否在 100 ms 内平稳停住。</p>
+
+  <h2>观测：黑匣子、时间戳与抖动直方图</h2>
+
+  <p>这一节解决一个问题：你怎么知道它真的准时。</p>
+
+  <p>先要有黑匣子。每个周期写一条定长记录——时间戳、执行耗时、状态机状态、收到的帧数、错误码、输入校验和——进预分配环形缓冲。1 kHz、每条 24 B、存 60 s，就是 1.44 MB；一颗 2 MB 的 SRAM 够存一分钟的全量回放。定长是关键：变长记录会在最需要它的时候触发分配。</p>
+
+  <p>时间戳必须对齐到同一个单调时钟（CLOCK_MONOTONIC_RAW），而且记「采样时刻」不是「收到时刻」——后者包含了你正想测量的那段延迟。EtherCAT 的分布式时钟给所有从站一个小于 1 µs 的共同基准；CAN 没有 DC，节点之间抖动在百微秒到毫秒级，只能靠主站本地时间戳，误差就是总线延迟本身。对齐没做好，后面所有频率分析都是假的。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch04-fig5-title ch04-fig5-desc">
+        <title id="ch04-fig5-title">10 万个控制周期的抖动分布</title>
+        <desc id="ch04-fig5-desc">横轴为抖动绝对值，按 25 微秒到 800 微秒以上分段；纵轴为周期数，对数刻度。绝大多数周期抖动在 100 微秒以内，但仍有 480 个周期落在 400 到 800 微秒，20 个周期超过 800 微秒。均值 46 微秒，p99 为 168 微秒，p99.9 为 390 微秒，最大 910 微秒。</desc>
+        <g font-size="12">
+          <g stroke-width="0.5" stroke-dasharray="2 4" style="stroke:var(--line)">
+            <line x1="70" y1="40" x2="570" y2="40"/>
+            <line x1="70" y1="80" x2="570" y2="80"/>
+            <line x1="70" y1="120" x2="570" y2="120"/>
+            <line x1="70" y1="160" x2="570" y2="160"/>
+            <line x1="70" y1="200" x2="570" y2="200"/>
+          </g>
+          <g text-anchor="end" style="fill:var(--muted-ink)">
+            <text x="62" y="44">100k</text>
+            <text x="62" y="84">10k</text>
+            <text x="62" y="124">1k</text>
+            <text x="62" y="164">100</text>
+            <text x="62" y="204">10</text>
+            <text x="62" y="244">1</text>
+          </g>
+          <text x="70" y="28" style="fill:var(--muted-ink)">周期数（对数刻度）</text>
+
+          <g style="fill:var(--d1);fill-opacity:.22;stroke:var(--d1)" stroke-width="1.2">
+            <rect x="76" y="53.8" width="59.4" height="186.2"/>
+            <rect x="147.4" y="59.7" width="59.4" height="180.3"/>
+            <rect x="218.8" y="72.7" width="59.4" height="167.3"/>
+            <rect x="290.2" y="92.4" width="59.4" height="147.6"/>
+            <rect x="361.6" y="107.1" width="59.4" height="132.9"/>
+            <rect x="433" y="132.8" width="59.4" height="107.2"/>
+            <rect x="504.4" y="188" width="59.4" height="52"/>
+          </g>
+          <g text-anchor="middle" style="fill:var(--ink-2)">
+            <text x="105.7" y="48">45 200</text>
+            <text x="177.1" y="54">32 100</text>
+            <text x="248.5" y="67">15 200</text>
+            <text x="319.9" y="87">4 900</text>
+            <text x="391.3" y="102">2 100</text>
+            <text x="462.7" y="127">480</text>
+            <text x="534.1" y="182">20</text>
+          </g>
+
+          <line x1="70" y1="240" x2="570" y2="240" style="stroke:var(--line-2)" stroke-width="1"/>
+          <g text-anchor="middle" style="fill:var(--muted-ink)">
+            <text x="105.7" y="256">0–25</text>
+            <text x="177.1" y="256">25–50</text>
+            <text x="248.5" y="256">50–100</text>
+            <text x="319.9" y="256">100–200</text>
+            <text x="391.3" y="256">200–400</text>
+            <text x="462.7" y="256">400–800</text>
+            <text x="534.1" y="256">≥800</text>
+          </g>
+          <text x="70" y="280" style="fill:var(--muted-ink)">抖动 |j| / µs（相对理想栅格）· 每柱为该区间的周期数</text>
+
+          <g style="fill:var(--muted-ink)">
+            <text x="430" y="46">均值 46 µs</text>
+            <text x="430" y="66">p99 168 µs</text>
+            <text x="430" y="86">p99.9 390 µs</text>
+            <text x="430" y="106" style="fill:var(--signal-ink)">max 910 µs</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 4.5</span>10 万个控制周期的抖动分布，纵轴取对数后仍能看见最右侧那 20 个周期。
+      <span class="fig-note read-for">读者应看出：45 200 个周期落在 25 µs 以内，均值和 p99 都很漂亮；但 20 个超过 800 µs 的周期已经接近一整个周期，它们出现在哪一刻决定了机器人是抖一下还是摔一跤。</span>
+      <span class="fig-src">来源：作者按典型 PREEMPT_RT 分布构造，数量级示意，非实测。</span>
+    </figcaption>
+  </figure>
+
+  <p>最后一种测量不依赖软件自报：在循环开头拉高一个 GPIO、结尾拉低，用 10 MS/s 的逻辑分析仪看 10⁵ 个周期，时间分辨率 0.1 µs。软件自报的耗时里通常少了它自己造成的延迟——中断响应、缓存失效、以及测量代码本身。示波器则用来看另一件事：力矩指令与相电流之间的相位差，那才是延迟真正发生的地方。</p>
+
+  <p>下面的演示把「抖动 → 超时 → 每秒 miss 次数」这条链做成可调的。预设 GPOS 与 PREEMPT_RT 用的是同一个计算耗时 c = 880 µs，只改抖动 σ，所以两次结果的差别全部来自内核的唤醒确定性。读数的 p99 按起点到起点的周期偏差计算，比式 4.1 的栅格偏差大 √2 倍——同一个物理量，两种量法；示波器抓 GPIO 看到的是前者，调度分析算的是后者。</p>
+
+  <section class="demo" data-demo="jitter" aria-labelledby="ch04-demo-title">
+    <div class="demo-bar">
+      <span class="demo-live"><i aria-hidden="true"></i>Live</span>
+      <h4 class="demo-title" id="ch04-demo-title">抖动如何变成截止期丢失</h4>
+      <span class="demo-tag">Demo 4.1</span>
+    </div>
+
+    <div class="demo-body">
+      <div class="demo-stage">
+        <canvas id="ch04-jitter-cv" role="img" aria-label="40 个连续控制周期的执行时序。横轴为 0 到 40 毫秒的窗口，纵轴为每个周期内的 0 到 1400 微秒。每列一个周期，执行块从抖动偏移处下落到计算结束；越过 1000 微秒截止线的周期整列标红。"></canvas>
+      </div>
+
+      <div class="demo-hist">
+        <p class="ch04-hist-label" id="ch04-hist-label">周期分布 · 最近 1000 个周期</p>
+        <canvas id="ch04-jitter-hist" role="img" aria-labelledby="ch04-hist-label" aria-label="周期长度直方图，虚线标出 1.000 毫秒的标称周期。"></canvas>
+      </div>
+
+      <dl class="demo-readout">
+        <div><dt>平均周期</dt><dd><span data-readout="mean">1.000</span><small>ms</small></dd></div>
+        <div><dt>p99 抖动</dt><dd><span data-readout="p99">140</span><small>µs</small></dd></div>
+        <div><dt>miss 率</dt><dd><span data-readout="rate">0.0</span><small>%</small></dd></div>
+        <div><dt>每秒 miss</dt><dd><span data-readout="per">0</span><small>次/s</small></dd></div>
+      </dl>
+    </div>
+
+    <div class="demo-controls ch04-controls">
+      <div class="ch04-ctl">
+        <label for="ch04-sigma">抖动 σ</label>
+        <input id="ch04-sigma" type="range" min="0" max="500" step="5" value="60">
+        <output class="demo-out" for="ch04-sigma" id="ch04-sigma-out">60 µs</output>
+      </div>
+      <div class="ch04-ctl">
+        <label for="ch04-cost">计算耗时 c</label>
+        <input id="ch04-cost" type="range" min="200" max="1400" step="10" value="660">
+        <output class="demo-out" for="ch04-cost" id="ch04-cost-out">660 µs</output>
+      </div>
+      <div class="ch04-presets">
+        <button type="button" class="ch04-preset" data-preset="gpos" aria-pressed="false">GPOS</button>
+        <button type="button" class="ch04-preset" data-preset="rt" aria-pressed="false">PREEMPT_RT</button>
+      </div>
+    </div>
+
+    <p class="ch04-note">时间轴按约 1/80 速滚动；抖动建模为零均值高斯并截断在 ±3.2σ，真实系统的尾巴比高斯更肥。</p>
+  </section>
+
+  <h2>没按时怎么办</h2>
+
+  <p>这一节解决一个问题：错过截止期之后，系统应该做什么。</p>
+
+  <p>第一步是把错误分级，因为「出错」不是一个等级。E0 是信息：温度 75 °C、电流接近限幅，记录即可。E1 可恢复：单帧 CRC 错、一次丢帧，下一个周期自己会好。E2 需要降级：连续 3 帧缺失、跟随误差超过 0.1 rad、母线欠压到 42 V。E3 必须停机：过流、编码器跳变、看门狗复位。分级的意义是让上层知道「还能不能继续」，而不是全部走同一个急停。</p>
+
+  <p>降级是一条有序的路径，不是三个并列的 if。先是限速：把关节角速度上限从 3 rad/s 压到 0.5 rad/s，力矩限幅同步收紧，这一步不改变控制律，只改边界。再是软停：沿当前轨迹在 2 s 内减速到零，期间仍然闭环，所以还能纠偏。最后是硬停：切 PWM、机械制动，响应小于 10 ms（量级估计），此后位置不再保持。每一级都要有触发条件、超时和恢复条件；恢复条件往往比触发条件更严格，比如降级后要连续 100 帧无错才允许回到 RUN。</p>
+
+  <p>用 if-else 堆这件事会出问题：嵌套的异常分支会在最紧张的时刻丢掉「已经降级」这个事实，恢复时跳回错误的初始态。状态机把每条边都写成一个带条件的转移，图 4.4 就是它的最小版本。</p>
+
+  <p>OTA 也要按同样的思路设计。A/B 双分区、启动失败自动回滚，回滚条件是「启动 3 次内发生看门狗复位」或「自检失败」。新固件先跑影子模式：10 min 内只记录不执行，把它算出的力矩和现役固件对比，偏差超过阈值就拒绝切换。关节固件通常 200–600 KB，A/B 分区多占一倍 flash——这是必须付的成本，因为人形机器人的关节固件刷坏一次，通常意味着把机器人拆开。</p>
+
+  <section class="takeaways" data-takeaways aria-labelledby="ch04-takeaways">
+    <p class="kicker" id="ch04-takeaways">本章要点 <span>Takeaways</span></p>
+    <ol>
+      <li><strong>1 kHz 的验收指标是分布，不是均值。</strong>写「p99.9 抖动 &lt; 100 µs、10⁶ 周期内 max &lt; 300 µs」，不要写「平均周期 1 ms」——后者的通过率永远是 100%。</li>
+      <li><strong>频率分层由物理时间常数决定，不由 CPU 决定。</strong>电流环 10–20 kHz、关节环 1 kHz、估计 100–500 Hz、规划 30–100 Hz；每层只向下传目标、前馈、增益和一个时间戳，晚到的数据必须显式丢弃或外推。</li>
+      <li><strong>单条 CAN FD 的 1 kHz 上限是每帧 6 个关节、每毫秒约 3 帧。</strong>64 B 帧约 156 µs，状态方向约 18 个关节；30 关节要 60 帧、9.4 ms，所以 30 关节以上必须 EtherCAT 或多总线，这是架构约束，调参救不了。</li>
+      <li><strong>硬实时只在 MCU 上成立，ROS 2 负责 100 Hz 以下的决策。</strong>而且要假设自己会死：主控进程被 kill 之后，机器人应该在 100 ms 内平稳停住。</li>
+      <li><strong>降级是有向图，不是 if-else。</strong>限速 → 软停 → 硬停，每一级的触发条件都必须是测量量（3 帧缺失、0.1 rad 误差、42 V 欠压），恢复条件比触发条件更严格。</li>
+    </ol>
+  </section>
+
+  <a class="next-chapter" href="#ch-05">
+    <span class="next-kicker">下一章 · Next</span>
+    <span class="next-title">05｜动力学与全身控制：让 30 个关节协同工作</span>
+    <span class="next-arrow" aria-hidden="true">→</span>
+  </a>
+</section>

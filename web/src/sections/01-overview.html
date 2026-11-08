@@ -1,0 +1,663 @@
+<section class="chapter" id="ch-01" data-chapter="01">
+  <style>
+    /* 本章专用：全部选择器以 #ch-01 开头 */
+    @media (max-width: 767px) {
+      #ch-01 .stat-row--3 { grid-template-columns: 1fr; }
+      #ch-01 .stat-row--3 .stat { border-left: 0; padding-left: 0; }
+      #ch-01 .stat-row--3 .stat + .stat { border-top: 1px solid var(--line); }
+    }
+  </style>
+
+  <header class="chapter-head">
+    <div class="ch-meta">
+      <span class="ch-num" aria-hidden="true">01</span>
+      <p class="kicker">The Whole Stack</p>
+    </div>
+    <h2>全景：人形机器人<br>到底难在哪</h2>
+    <p class="lede">从一个「从椅子上站起来」的动作出发，把它拆成六层系统、一份力矩预算和一条 40 毫秒的延迟链。读完这一章，你应该能画出全站的地图，说出每一层在做什么、会在哪里坏，并判断一段演示视频属于哪一层的工作。</p>
+  </header>
+
+  <p>把椅子往后推十厘米，双脚收回来，上身前倾，等重心越过脚面，再伸膝、抬臀、站直。这个动作你用不到两秒，从不计算力矩。一台 1.32 m、35 kg 的人形机器人做同一件事，要在 1 ms 的控制周期里协调 23 个自由度（Degree of Freedom, DoF）——也就是 23 个独立运动的轴——并且保证膝盖在最吃力的一刻有 90 N·m 的峰值力矩可用。</p>
+
+  <p>机器人没有把解写进结构里。它必须把同一个动作拆成六个可以分别计算、又可以拼回去的问题，而这六个问题分属六个学科。</p>
+
+  <h2>站起来：一个动作，六个学科</h2>
+
+  <p>这一节只回答一个问题：为什么一个不到两秒的动作，没法靠「一个更聪明的算法」解决。</p>
+
+  <p>整个过程大约 1.5 s，质心（center of mass, CoM）升高 0.4 m。对一个 60 kg 的人，平均功率 <span class="formula-inline">mgh/t</span> ≈ 160 W，峰值 300–400 W，比一台电水壶低一个数量级。你的身体从不计算这些，因为膝关节、踝关节和平衡反射已经把这个问题的解写进了结构里。机器人要从零开始算，于是同一个动作被拆成六个问题。</p>
+
+  <ol>
+    <li><strong>机构</strong>：膝盖要出多大力？以 60 kg 参考机体算，单腿支撑时地面反力等于体重 589 N，力臂 0.15 m，力矩 88 N·m。</li>
+    <li><strong>执行器</strong>：88 N·m 从哪来？一个 490 g 的准直驱（quasi-direct drive, QDD）模组峰值只有 22 N·m，要四个并联（前者），或者用一个 100:1 的谐波减速器（后者）。四个并联多 1.5 kg；谐波把转子惯量折算到关节侧时按减速比的平方放大，100:1 就是 10⁴ 倍——惯量大意味着同样的力矩指令下关节加速度小、力控迟钝，撞地冲击也直接进减速器，所以腿宁可背四个低减速比模组，也不愿背这个惯量。</li>
+    <li><strong>实时</strong>：23 个关节、1 kHz，1 ms 内读完编码器、解完优化、把力矩写进总线；一次 300 µs 的调度抖动就能把余量吃光。</li>
+    <li><strong>平衡</strong>：接触面从「椅面 + 双脚」变成「双脚」，约束在动作中途切换一次，切换前后不是同一个方程。</li>
+    <li><strong>感知</strong>：椅子在哪、坐面多高、脚踩实没有。相机 30 Hz，一拍 33 ms，而你已经站起来了。</li>
+    <li><strong>决策</strong>：先站还是先迈、手要不要扶、站到一半发现椅子太矮怎么办。这些规则写不完，于是有了从数据里学的策略。</li>
+  </ol>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 360" role="img" aria-labelledby="ch01-fig1-title ch01-fig1-desc">
+        <title id="ch01-fig1-title">站起来这个动作拆出的六个学科问题</title>
+        <desc id="ch01-fig1-desc">左侧是坐、前倾、站起三个姿态的侧视示意图，椅面高 0.45 米；右侧依次列出机构、执行器、实时、平衡、感知、决策六个问题，每个问题带一个量级数字。</desc>
+
+        <line x1="16" y1="312" x2="250" y2="312" style="stroke:var(--line-2);stroke-width:1"/>
+        <path d="M30 250 H86 M30 250 V206 M38 256 V312 M80 256 V312" fill="none" style="stroke:var(--line-2);stroke-width:1.5"/>
+
+        <g style="stroke:var(--ink-2);stroke-width:2;fill:none" stroke-linecap="round">
+          <path d="M72 250 L112 250 L118 312"/>
+          <path d="M72 250 L66 176"/>
+          <path d="M66 184 L80 212 L86 240"/>
+        </g>
+        <circle cx="72" cy="250" r="3.5" style="fill:var(--d2)"/>
+        <circle cx="112" cy="250" r="3.5" style="fill:var(--d2)"/>
+        <circle cx="64" cy="158" r="10" style="fill:none;stroke:var(--ink-2);stroke-width:2"/>
+
+        <g style="stroke:var(--ink-2);stroke-width:2;fill:none" stroke-linecap="round">
+          <path d="M138 250 L172 250 L178 312"/>
+          <path d="M138 250 L158 178"/>
+          <path d="M158 186 L146 216 L140 240"/>
+        </g>
+        <circle cx="138" cy="250" r="3.5" style="fill:var(--d2)"/>
+        <circle cx="172" cy="250" r="3.5" style="fill:var(--d2)"/>
+        <circle cx="166" cy="160" r="10" style="fill:none;stroke:var(--ink-2);stroke-width:2"/>
+
+        <g style="stroke:var(--ink-2);stroke-width:2;fill:none" stroke-linecap="round">
+          <path d="M223 190 L226 250 L227 312"/>
+          <path d="M223 190 L227 128"/>
+          <path d="M227 136 L232 178 L230 208"/>
+        </g>
+        <circle cx="223" cy="190" r="3.5" style="fill:var(--d2)"/>
+        <circle cx="226" cy="250" r="3.5" style="fill:var(--d2)"/>
+        <circle cx="229" cy="110" r="10" style="fill:none;stroke:var(--ink-2);stroke-width:2"/>
+
+        <text x="60" y="336" font-size="12" text-anchor="middle" style="fill:var(--muted-ink)">坐</text>
+        <text x="152" y="336" font-size="12" text-anchor="middle" style="fill:var(--muted-ink)">前倾</text>
+        <text x="226" y="336" font-size="12" text-anchor="middle" style="fill:var(--muted-ink)">站起</text>
+        <text x="16" y="356" font-size="12" style="fill:var(--muted-ink)">重心先从椅面移到双脚上方，再伸膝</text>
+
+        <line x1="262" y1="24" x2="262" y2="330" style="stroke:var(--line);stroke-width:1"/>
+
+        <g font-size="14" font-weight="600" style="fill:var(--d2)" class="t-mono">
+          <text x="278" y="38">1</text>
+          <text x="278" y="90">2</text>
+          <text x="278" y="142">3</text>
+          <text x="278" y="194">4</text>
+          <text x="278" y="246">5</text>
+          <text x="278" y="298">6</text>
+        </g>
+        <g font-size="13.5" font-weight="600" style="fill:var(--ink)">
+          <text x="300" y="38">机构</text>
+          <text x="300" y="90">执行器</text>
+          <text x="300" y="142">实时</text>
+          <text x="300" y="194">平衡</text>
+          <text x="300" y="246">感知</text>
+          <text x="300" y="298">决策</text>
+        </g>
+        <g font-size="12" style="fill:var(--muted-ink)">
+          <text x="300" y="56">膝 88 N·m = 589 N × 0.15 m</text>
+          <text x="300" y="108">90 N·m 的模组约 0.5–1.5 kg</text>
+          <text x="300" y="160">23 关节 × 1 kHz，1 ms 一拍</text>
+          <text x="300" y="212">支撑面从椅面换成双脚</text>
+          <text x="300" y="264">相机 30 Hz，一拍 33 ms</text>
+          <text x="300" y="316">先站还是先迈，规则写不完</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 1.1</span>起立的六个问题 —— 同一个动作在六个学科里表现为六个不能互相替代的问题。
+      <span class="fig-note read-for">读者应看出：力矩、时间、接触与感知在同一秒内耦合，任何一层单独做对都不够。</span>
+      <span class="fig-src">来源：作者绘制，数值为 60 kg 机体、膝力臂 0.15 m 的量级估算。</span>
+    </figcaption>
+  </figure>
+
+  <p>六个问题里只有第一个能用一张纸算完，而它决定了后面所有层的规格。单腿支撑、准静态，地面反力等于体重，关节力矩就是力乘力臂：</p>
+
+  <div class="formula-block">
+    <span class="formula">τ<sub>knee</sub> ≈ F<sub>z</sub> · d = m g · d</span>
+    <span class="formula-no">1.1</span>
+  </div>
+
+  <p>为了和后面的机型对比，这里先用一台 60 kg 的参考机体做静力矩预算——它不是本章开头那台 1.32 m、35 kg 的 G1，而是一台与成年人同量级的机器；所有结果最后都除以体重，换成 N·m/kg 再比。代入 m = 60 kg、d = 0.15 m，膝 88 N·m；踝的力臂被足长锁死（脚长 0.24 m、压力中心最多前移到踝前 0.08 m），只有 47 N·m；髋在额状面 d = 0.10 m 时 59 N·m。88 N·m 大约等于把一桶 9 kg 的水挂在 1 m 长的扳手末端——这就是人站起来时膝盖承受的量级。换成代码只有二十行：</p>
+
+  <pre data-lang="python"><code># 静力矩预算：单腿支撑时，髋/膝/踝各要出多大力
+MASS = 60.0                     # 整机质量，kg
+G = 9.81                        # 重力加速度，m/s²
+LEVER = {"hip": 0.10, "knee": 0.15, "ankle": 0.08}   # 力臂，m；踝受脚长与压力中心限制
+RATED = {"G1": (90, 35), "H1": (360, 47)}            # 膝峰值 N·m / 整机 kg
+
+F_z = MASS * G                  # 单腿支撑：全部体重压在一条腿上
+print(f"F_z = {F_z:.0f} N")
+for joint, d in LEVER.items():
+    tau = F_z * d               # τ ≈ F·d，先忽略惯性项
+    print(f"{joint:5s} d={d:.2f} m  tau={tau:5.1f} N·m  "
+          f"{tau / MASS:.2f} N·m/kg")
+
+for name, (tau, m) in RATED.items():
+    print(f"{name}: knee {tau} N·m / {m} kg = {tau / m:.1f} N·m/kg")</code></pre>
+
+  <p>把结果除以质量，得到的是质量归一化，不是尺度不变量：单腿支撑时 <span class="formula-inline">τ/m = g·d</span>，d 是地面反力到关节的力臂，随姿态和腿长变。60 kg 参考机体在 d = 0.15 m 时是 1.5&nbsp;N·m/kg；G1 的膝关节给到 2.6&nbsp;N·m/kg，按同样的 d 算只有 1.7 倍余量，够走路和慢速起坐；H1 的腿更长，同一姿势 d ≈ 0.20 m，静力矩需求约 2.0&nbsp;N·m/kg，而它给到 7.7&nbsp;N·m/kg，余量约 3.9 倍，才有跑跳和抗冲击的余地。跨尺寸比较要么按各自的 d 折算，要么直接报 <span class="formula-inline">τ/(m·g·d)</span>——后者才是无量纲的余量。</p>
+
+  <aside class="callout callout--field" data-reveal>
+    <p class="callout-kicker">工程经验 <span>Field Note</span></p>
+    <p>静力矩只是入场券。站起时膝角速度到 1–2 rad/s，惯性项与重力项同量级；选型通常按静力矩乘 1.5–2，跑跳要乘 3。按静态值选出来的关节，第一次快走就会反复触到峰值限幅，然后过热。</p>
+  </aside>
+
+  <h2>为什么是人形，<br>以及大多数时候为什么不是</h2>
+
+  <p>这一节做一个判断：什么场景值得为「人形」付 30 个关节的代价。</p>
+
+  <p>支持人形的理由通常有三条，只有前两条是工程理由。</p>
+
+  <h3>环境是为人设计的</h3>
+
+  <p>门洞净宽 0.8–0.9 m，台阶踢面 0.17 m、踏面 0.28 m，厨房台面 0.75 m，货架 1.8 m，工具手柄直径 25–40 mm。这些数字不是为机器人定的。轮式底盘要进一栋老楼，先得改门槛、坡道和电梯；人形不需要改造环境，它只需要走进来。</p>
+
+  <div class="stat-row stat-row--3" data-reveal>
+    <div class="stat">
+      <span class="stat-value">0.8<small>m</small></span>
+      <span class="stat-label">门洞净宽</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">0.17<small>m</small></span>
+      <span class="stat-label">台阶踢面</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">0.75<small>m</small></span>
+      <span class="stat-label">台面高度</span>
+    </div>
+  </div>
+
+  <h3>人类数据可以直接迁移</h3>
+
+  <p>人形与人同构：同样的关节顺序、相近的肢体比例、同样的末端。一段 30 s 的叠衣服视频，对人是一个示范，对人形是近似可直接重定向（retargeting）的关节轨迹，尺度差 0.8–1.0 倍；对一台轮式机械臂，它是另一个抓取规划问题。动捕、遥操作、第一视角视频，这些数据的规模是人形独有的优势，也是 2023 年之后视觉-语言-动作模型愿意押注人形的原因。</p>
+
+  <h3>社会接受度</h3>
+
+  <p>在人身边工作，高度、速度、动作范围都可预期，人不需要重新学习如何与它共处。这条理由真实，但它不是工程理由：它决定产品能不能落地，不决定技术能不能成立。</p>
+
+  <h3>反方：多数场景人形是更差的选择</h3>
+
+  <p>把账算清楚。30 个关节对 2 个驱动轮，每个关节有编码器、驱动器、减速器三个失效点；双足行走的运输代价（cost of transport, CoT）在 0.2–0.6，轮式在 0.05 量级。CoT 是移动一公斤一米消耗的能量（焦耳每牛·米，无量纲），越小越省；0.6 对 0.05 是 12 倍，同样电池、同样载荷，人形只能走十分之一左右。实际续航还要算电子设备与待机功耗，下面 8 h 对 2 h 是整机口径：轮式 8 h，人形 2 h（均为量级估计）。轮式底盘的负载自重比通常大于 1，人形目前公开标称在 0.3 量级（Figure 02：20 kg / 70 kg）；轮式不会摔倒，人形摔倒是灾难性失效。成本上，30 个谐波关节模组按 $300–1200 一个算，仅关节物料就是 $9k–36k。</p>
+
+  <p>所以判断规则可以写得很硬：任务种类超过 10 种且经常变、环境不能改造、需要人的工具或人的演示——三条同时成立，人形才划算。缺一条，轮式或专用机械在成本、续航、可靠性上都更好。人形不是更先进的机器人，是更通用的机器人；通用性是用效率、成本和可靠性换来的。</p>
+
+  <h2>七个机型：一张表看清量级</h2>
+
+  <p>这一节给一把尺子：不看演示视频，看这张表，并且先问每个数字是在什么口径下公布的。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 1.1 七个机型（H1 与 H1-2 分列）的公开规格（— 表示厂方未按该口径公布；负载比 = 标称负载 ÷ 整机质量）</caption>
+      <thead>
+        <tr>
+          <th>机型 / 年份</th>
+          <th>DoF</th>
+          <th>身高 / 体重</th>
+          <th>膝力矩</th>
+          <th>速度</th>
+          <th>续航</th>
+          <th>负载比</th>
+          <th>价格</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>ASIMO 2011</td><td>57</td><td>1.30 / 48</td><td>—</td><td class="num">2.5 m/s</td><td>1 h</td><td>—</td><td>未出售</td></tr>
+        <tr><td>Atlas 2016</td><td>28</td><td>1.50 / 75</td><td>—</td><td>—</td><td>电池</td><td>—</td><td>研究平台</td></tr>
+        <tr><td>Cassie 2017</td><td>10</td><td>1.1 / 31</td><td>—</td><td class="num">1.4 m/s</td><td>约 5 h</td><td>无臂</td><td>$300k</td></tr>
+        <tr><td>H1 2024</td><td>19</td><td>1.80 / 47</td><td class="num">360 N·m</td><td class="num">3.3 m/s</td><td>864 Wh</td><td>—</td><td>未公布</td></tr>
+        <tr><td>H1-2 2024</td><td>27</td><td>1.78 / 70</td><td class="num">360 N·m</td><td class="num">&lt;2 m/s</td><td>864 Wh</td><td>—</td><td>未公布</td></tr>
+        <tr><td>G1 2024</td><td>23 / 43</td><td>1.32 / 35</td><td class="num">90 N·m</td><td>—</td><td>2 h</td><td>单臂 2 kg</td><td>$13.5k 起</td></tr>
+        <tr><td>Optimus 2023</td><td>—</td><td>1.73 / 57</td><td>—</td><td>—</td><td>—</td><td>—</td><td>$20k–30k</td></tr>
+        <tr><td>Figure 02 2024</td><td>约 35</td><td>1.68 / 70</td><td>—</td><td class="num">1.2 m/s</td><td>5 h / 2.3 kWh</td><td class="num">0.29</td><td>未公布</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small">身高单位 m、体重单位 kg。来源：Unitree G1、H1 与 H1-2 产品页、Honda P2/ASIMO 公开资料、Boston Dynamics 与 Agility 公开资料、Figure 与 Tesla 公开资料，2026-11 核对。DoF 口径：ASIMO 57 含双手 26，Atlas 的 28 关节为 2013/2016 两代共同口径，G1 23 为 EDU 43，H1 19（每腿 5、每臂 4）与 H1-2 27（每腿 6、每臂 7）分列，Figure 02 约 35 含手 16。控制频率没有任何一家公布：行业默认关节环 1 kHz、电流环 10–20 kHz，这是工程惯例，不是规格。</p>
+
+  <p>厂方数字可以直接对到产品页：<a href="https://www.unitree.com/g1">Unitree G1</a>、<a href="https://www.unitree.com/h1">Unitree H1</a>、<a href="https://bostondynamics.com/atlas/">Boston Dynamics Atlas</a>、<a href="https://www.figure.ai/">Figure</a>；Agility 的 Cassie 只找到公开资料，没有可直接引用的产品页。同型号不同后缀的差别也不小：H1 是 19 个自由度（每腿 5、每臂 4），H1-2 把踝改成 2 自由度、每腿 6 个，臂加到 7 个，就成了 27 个、70 kg。</p>
+
+  <p><strong>第一，力矩除以体重是质量归一化，不是尺度不变量。</strong>单腿支撑时 τ/m = g·d，d 是地面反力到关节的力臂，随姿态与腿长变，所以这个比值只消掉质量、没消掉尺寸。G1 的膝力矩 90 N·m 配 35 kg 得 2.6&nbsp;N·m/kg；它的 d ≈ 0.15 m，静力矩需求 1.5&nbsp;N·m/kg，余量 1.7 倍。H1 的腿更长，同一姿势 d ≈ 0.20 m，需求约 2.0&nbsp;N·m/kg；360 N·m 配 47 kg 得 7.7&nbsp;N·m/kg，余量约 3.9 倍。跨尺寸比较要按各自的 d 折算，或直接报 τ/(m·g·d)。看一台新机型，先算这个比值，比看它跳得多高可靠。</p>
+
+  <p><strong>第二，速度和续航是同一块电池的两面。</strong>H1 的 0.864 kWh 要在 3.3 m/s 时输出 1.5 kW 量级，满打满算 35 min；Figure 02 的 2.25 kWh 摊到 5 h，平均 450 W，代价是最高速度只有 1.2 m/s。这不是谁更强，是两个设计点：一个卖爆发，一个卖工时。</p>
+
+  <p><strong>第三，价格差两个数量级，买的不是力矩。</strong>G1 起价 $13.5k，Cassie 约 $300k。差价主要在可靠性、传感、标定和工程支持——Cassie 卖的是能发论文的研究平台，G1 卖的是能批量出货的硬件。</p>
+
+  <p>还有一件事值得注意：这张表里「膝力矩」一列大量空白，控制频率干脆没有一列。四足的规格书会把峰值/连续力矩、转矩带宽、总线频率全列出来，因为买家是工程师；人形的买家还有投资人、集成商和研究者，规格书就按叙事写。做选型时，这两列只能从论文、拆解和实测里补。</p>
+
+  <h2>六层栈：全站的地图</h2>
+
+  <p>这一节给出全站的地图：六层，每层只回答一个问题，只向上层提供一个窄接口。</p>
+
+  <p>分层的依据不是硬件长什么样，是时间尺度。相邻两层如果频率差 20 倍以上就必须分开，否则快的那层会被慢的拖死：1 kHz 的控制环里塞进一个 30 Hz 的视觉回调，最坏情况是每 33 ms 卡一次 20 ms。前提是这个回调和 1 kHz 环在同一颗核上、优先级更高，或者它持有共享锁、关了中断 20 ms——这时高频环只能等。分层就是把这些长任务赶到另一颗核或另一个时间尺度上。</p>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 400" role="img" aria-labelledby="ch01-fig2-title ch01-fig2-desc">
+        <title id="ch01-fig2-title">人形机器人的六层系统栈与各层频率</title>
+        <desc id="ch01-fig2-desc">从下到上依次为机械、硬件、嵌入式、实时控制、感知、决策与学习六层，每层标注输入到输出的转换与该层的工作频率，从连续时间到 1 至 50 赫兹。</desc>
+
+        <g>
+          <rect x="150" y="296" width="312" height="46" rx="3" style="fill:var(--d1);fill-opacity:.07;stroke:var(--d1);stroke-width:1"/>
+          <text x="20" y="324" font-size="12" class="t-mono" style="fill:var(--muted-ink)">02</text>
+          <text x="140" y="324" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--ink)">机械</text>
+          <text x="164" y="324" font-size="12" style="fill:var(--ink-2)">力矩 → 关节运动</text>
+          <text x="474" y="324" font-size="12" class="t-mono" style="fill:var(--muted-ink)">模态 30–80 Hz</text>
+
+          <rect x="150" y="242" width="312" height="46" rx="3" style="fill:var(--d1);fill-opacity:.07;stroke:var(--d1);stroke-width:1"/>
+          <text x="20" y="270" font-size="12" class="t-mono" style="fill:var(--muted-ink)">03</text>
+          <text x="140" y="270" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--ink)">硬件</text>
+          <text x="164" y="270" font-size="12" style="fill:var(--ink-2)">电流 → 力矩</text>
+          <text x="474" y="270" font-size="12" class="t-mono" style="fill:var(--muted-ink)">10–20 kHz</text>
+
+          <rect x="150" y="188" width="312" height="46" rx="3" style="fill:var(--d1);fill-opacity:.07;stroke:var(--d1);stroke-width:1"/>
+          <text x="20" y="216" font-size="12" class="t-mono" style="fill:var(--muted-ink)">04</text>
+          <text x="140" y="216" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--ink)">嵌入式</text>
+          <text x="164" y="216" font-size="12" style="fill:var(--ink-2)">力矩指令 → 定时帧</text>
+          <text x="474" y="216" font-size="12" class="t-mono" style="fill:var(--muted-ink)">1 kHz / &lt;50 µs</text>
+
+          <rect x="150" y="134" width="312" height="46" rx="3" style="fill:var(--d2);fill-opacity:.09;stroke:var(--d2);stroke-width:1"/>
+          <text x="20" y="162" font-size="12" class="t-mono" style="fill:var(--muted-ink)">05</text>
+          <text x="140" y="162" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--ink)">实时控制</text>
+          <text x="164" y="162" font-size="12" style="fill:var(--ink-2)">状态、任务 → 关节力矩</text>
+          <text x="474" y="162" font-size="12" class="t-mono" style="fill:var(--muted-ink)">500–1000 Hz</text>
+
+          <rect x="150" y="80" width="312" height="46" rx="3" style="fill:var(--d3);fill-opacity:.08;stroke:var(--d3);stroke-width:1"/>
+          <text x="20" y="108" font-size="12" class="t-mono" style="fill:var(--muted-ink)">08</text>
+          <text x="140" y="108" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--ink)">感知</text>
+          <text x="164" y="108" font-size="12" style="fill:var(--ink-2)">像素、IMU → 位姿、接触</text>
+          <text x="474" y="108" font-size="12" class="t-mono" style="fill:var(--muted-ink)">30–500 Hz</text>
+
+          <rect x="150" y="26" width="312" height="46" rx="3" style="fill:var(--d3);fill-opacity:.08;stroke:var(--d3);stroke-width:1"/>
+          <text x="20" y="54" font-size="12" class="t-mono" style="fill:var(--muted-ink)">06/07</text>
+          <text x="140" y="54" font-size="13.5" font-weight="600" text-anchor="end" style="fill:var(--ink)">决策 / 学习</text>
+          <text x="164" y="54" font-size="12" style="fill:var(--ink-2)">目标、地图 → 任务、落点</text>
+          <text x="474" y="54" font-size="12" class="t-mono" style="fill:var(--muted-ink)">1–50 Hz</text>
+        </g>
+
+        <text x="18" y="372" font-size="12" style="fill:var(--muted-ink)">延迟预算：上面三层 39–88 ms，下面三层 0.6–1.1 ms；每往下一层，频率高 20–100 倍。</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 1.2</span>六层栈 —— 从 1 Hz 到 20 kHz 跨四个数量级，延迟却几乎全花在最上面三层。
+      <span class="fig-note read-for">读者应看出：每层的频率决定了它能容忍多长的延迟，也决定了层间接口必须多窄。</span>
+      <span class="fig-src">来源：作者绘制，频率取公开系统与常见实现的量级。</span>
+    </figcaption>
+  </figure>
+
+  <p>表 1.2 里的缩写先给全称：QP 是二次规划（quadratic programming，二次目标加线性约束）；WCET 是最坏执行时间（worst-case execution time）；IMU 是惯性测量单元；PID 是比例-积分-微分控制器（proportional-integral-derivative）。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 1.2 六层的输入、输出、关键指标与典型失败模式</caption>
+      <thead>
+        <tr><th>层（章）</th><th>输入 → 输出</th><th>关键指标</th><th>典型失败模式</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>机械（02）</td><td>关节力矩、地面反力 → 连杆运动与力传递</td><td>刚度、背隙、质量、力矩密度</td><td>谐波柔度让末端低 3 mm；连杆一阶模态落到 40 Hz，控制带宽上不去</td></tr>
+        <tr><td>硬件（03）</td><td>母线电压、PWM → 三相电流、力矩</td><td>峰值/连续力矩、效率 80–90%、电压圆</td><td>母线跌到 40 V 触发欠压；MOSFET 过温降额</td></tr>
+        <tr><td>嵌入式（04）</td><td>1 kHz 的力矩/位置指令 → 同步的电流帧</td><td>抖动 p99.9、WCET、总线负载</td><td>一次 300 µs 的异常击穿截止期；优先级反转</td></tr>
+        <tr><td>实时控制（05）</td><td>状态、任务、接触序列 → 各关节力矩</td><td>QP 求解 0.9 ms 均值、1.05 ms 峰值（14 DoF）</td><td>QP 不可行退回上一帧；力矩饱和；接触力出摩擦锥</td></tr>
+        <tr><td>感知（08）</td><td>相机 30 Hz、IMU、编码器、力 → 位姿、速度、接触、高程图</td><td>延迟 10–30 ms、漂移 1–2 cm/s</td><td>打滑被当成支撑；20 ms 估计延迟引起 2 Hz 振荡</td></tr>
+        <tr><td>决策 / 学习（06/07）</td><td>目标、地图、语言 → 落点、任务、策略动作</td><td>成功率、推理 10–50 ms、泛化</td><td>分布外地形；奖励黑客；策略 5–10 Hz 跟不上 1 m/s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small">QP 求解时间取 <a href="https://arxiv.org/abs/1305.2042">Herzog 等 2014</a> 在 14 自由度人形上的实测；其余为公开系统与常见实现的量级。</p>
+
+  <p>接口越窄，层越可替换。04 章交给 05 章的只有四样东西：关节角、关节角速度、力矩、接触标志，外加一个 1 kHz 的时限；05 章交给 06 章的只有质心状态和期望接触力；03 章交给 04 章的只有电流指令和编码器读数。任何一层想换实现，只要接口不变，上面几层不用动。</p>
+
+  <p>后面的八章，每一章都是把其中一层放大十倍来看。</p>
+
+  <h2>难在接触与带宽，不难在关节数</h2>
+
+  <p>这一节回答章标题：难在哪。</p>
+
+  <p>把问题逐层剥开，每加一个性质，就有一类数学工具失效。</p>
+
+  <p>30 个关节各自跟踪位置：每个关节一个 PID，稳态误差 0.1°，这是 1980 年代就解决的问题。加上浮动基（floating base），躯干 6 维没有驱动器，只能靠 IMU 和腿运动学估，漂移 1–2 cm/s；还能做，但要先有状态估计。加上单边接触（unilateral contact），脚只能推不能拉：法向力 f<sub>z</sub> ≥ 0，切向力被摩擦锥锁住 |f<sub>t</sub>| ≤ μ f<sub>z</sub>，支撑在 0.3–0.5 s 内切换一次，方程的结构跟着变。加上欠驱动（underactuated）：浮动基的 6 维没有驱动器，n 个关节只能直接控制 n 个自由度，质心与躯干姿态必须通过足底接触力间接控制；12 个腿关节相对 6 维质心是冗余，相对整个位形才是欠驱动——关节角不能任意配置。最后加上噪声和 20 ms 延迟：相位裕度是闭环增益降到 1（这个频率叫穿越频率）时相位离 −180° 还剩多少度，一个只有 45–60° 的环，在 10 Hz 处被 20 ms 延迟吃掉 72°，直接失稳。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 380" role="img" aria-labelledby="ch01-fig3-title ch01-fig3-desc">
+        <title id="ch01-fig3-title">难度瀑布：每加一个性质，可解的数学结构就少一块</title>
+        <desc id="ch01-fig3-desc">五级阶梯依次为 30 个关节的位置控制、加浮动基、加单边接触、加欠驱动（浮动基 6 维无驱动）、加噪声与 20 毫秒延迟；前两级可解，后三级变难，条形宽度逐级收窄表示可用工具变少。</desc>
+
+        <rect x="30" y="16" width="510" height="32" rx="3" style="fill:var(--d1);fill-opacity:.10;stroke:var(--d1);stroke-width:1.5"/>
+        <text x="42" y="37" font-size="13" font-weight="600" style="fill:var(--ink)">① 30 个关节，各自跟踪位置</text>
+        <text x="530" y="37" font-size="12" text-anchor="end" style="fill:var(--d1)">可解</text>
+        <text x="42" y="66" font-size="12" style="fill:var(--muted-ink)">工具：每个关节一个 PID，稳态误差 0.1°</text>
+
+        <rect x="30" y="88" width="445" height="32" rx="3" style="fill:var(--d1);fill-opacity:.10;stroke:var(--d1);stroke-width:1.5"/>
+        <text x="42" y="109" font-size="13" font-weight="600" style="fill:var(--ink)">② 加浮动基：躯干 6 维没人驱动</text>
+        <text x="465" y="109" font-size="12" text-anchor="end" style="fill:var(--d1)">可解</text>
+        <text x="42" y="138" font-size="12" style="fill:var(--muted-ink)">工具：IMU + 腿运动学，漂移 1–2 cm/s</text>
+
+        <rect x="30" y="160" width="380" height="32" rx="3" style="fill:var(--d2);fill-opacity:.12;stroke:var(--d2);stroke-width:1.5"/>
+        <text x="42" y="181" font-size="13" font-weight="600" style="fill:var(--ink)">③ 加单边接触：脚只能推不能拉</text>
+        <text x="400" y="181" font-size="12" text-anchor="end" style="fill:var(--signal-ink)">变难</text>
+        <text x="42" y="210" font-size="12" style="fill:var(--muted-ink)">新约束：f_z ≥ 0，|f_t| ≤ μ f_z，接触每 0.3–0.5 s 切换一次</text>
+
+        <rect x="30" y="232" width="315" height="32" rx="3" style="fill:var(--d2);fill-opacity:.12;stroke:var(--d2);stroke-width:1.5"/>
+        <text x="42" y="253" font-size="13" font-weight="600" style="fill:var(--ink)">④ 加欠驱动：浮动基 6 维没有驱动器</text>
+        <text x="335" y="253" font-size="12" text-anchor="end" style="fill:var(--signal-ink)">变难</text>
+        <text x="42" y="282" font-size="12" style="fill:var(--muted-ink)">12 个腿关节对 6 维质心是冗余；整个位形才是欠驱动</text>
+
+        <rect x="30" y="304" width="250" height="32" rx="3" style="fill:var(--d2);fill-opacity:.12;stroke:var(--d2);stroke-width:1.5"/>
+        <text x="42" y="325" font-size="13" font-weight="600" style="fill:var(--ink)">⑤ 加噪声与 20 ms 延迟</text>
+        <text x="270" y="325" font-size="12" text-anchor="end" style="fill:var(--signal-ink)">变难</text>
+        <text x="42" y="354" font-size="12" style="fill:var(--muted-ink)">10 Hz 处 72° 相位滞后，45–60° 的相位裕度不够用</text>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 1.3</span>难度瀑布 —— 让问题变难的是接触、欠驱动与延迟，不是 30 个关节；条形宽度表示还剩多少可直接套用的数学结构，收窄是示意。
+      <span class="fig-note read-for">读者应看出：前两级有成熟工具，后三级每加一个性质就少一类可用的数学结构。</span>
+      <span class="fig-src">来源：作者绘制；相位滞后按 φ = 360° · f · T_d 计算，T_d = 20 ms、f = 10 Hz。</span>
+    </figcaption>
+  </figure>
+
+  <p>剥到最后，剩下的是一个欠驱动、单边接触、部分可观测、带延迟的最优控制问题。它没有闭式解，只有三条路：用降阶模型加在线优化（05、06 章），从数据里学（07 章），或者把环境改简单——工业场景里的结构化地面、固定工位、护栏，本质上是第三条路的工程版。第一条路的推导在 MIT 的 <a href="https://underactuated.mit.edu">Underactuated Robotics</a> 里讲得最完整，第 4、5 章正好覆盖摆模型、ZMP 与足迹规划。</p>
+
+  <aside class="callout callout--intuition" data-reveal>
+    <p class="callout-kicker">直觉 <span>Intuition</span></p>
+    <p>直立是倒立摆唯一的不稳定平衡点，双足也一样。控制器的任务不是把误差消成零，而是在误差发散之前把支撑点挪到质心下面；走路的每一步，都是把一次即将发生的跌倒换成一个新的支撑点。</p>
+  </aside>
+
+  <h2>40 毫秒：从看到台阶到关节出力</h2>
+
+  <p>这一节算一笔账：闭环里的每一毫秒花在哪，哪一段值得优化。</p>
+
+  <p>链条的四个节点：相机 30 Hz，一帧 33 ms；状态估计 500 Hz，2 ms；全身控制（Whole-Body Control, WBC）500–1000 Hz，1–2 ms，它把任务、接触约束和关节限位写进同一个优化，一次算出所有关节的力矩；电流环 10–20 kHz，50–100 µs。把曝光、传输、检测、决策、总线全算上，典型 41 ms，最坏 89 ms。</p>
+
+  <div class="formula-block">
+    <span class="formula">φ = 360° · f · T<sub>d</sub></span>
+    <span class="formula-no">1.2</span>
+  </div>
+
+  <p>延迟的代价可以直接换算成相位：纯延迟 T 在频率 f 处造成 360°·f·T 的滞后，20 ms 在 10 Hz 处就是 72°（式 1.2）。一个设计良好的位置环相位裕度只有 45–60°；滞后把余量吃光，负反馈就变成正反馈，环开始振荡——延迟单独就能让一个本来稳定的环失稳。换算成距离：1.2 m/s 走 41 ms 是 4.9 cm，3.3 m/s 走 89 ms 是 29 cm——后者已经超过大多数楼梯的踏面深度。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 360" role="img" aria-labelledby="ch01-fig4-title ch01-fig4-desc">
+        <title id="ch01-fig4-title">从相机曝光到电流环的端到端延迟预算</title>
+        <desc id="ch01-fig4-desc">横轴为累计延迟 0 到 100 毫秒，画典型 41 毫秒与最坏 89 毫秒两条堆叠条；感知占 29 到 61 毫秒，决策 8 到 20 毫秒，控制 3 到 7 毫秒，执行不到 1.1 毫秒。</desc>
+
+        <g style="stroke:var(--line);stroke-width:.5" stroke-dasharray="2 4">
+          <line x1="120" y1="48" x2="120" y2="182"/>
+          <line x1="204" y1="48" x2="204" y2="182"/>
+          <line x1="288" y1="48" x2="288" y2="182"/>
+          <line x1="372" y1="48" x2="372" y2="182"/>
+          <line x1="456" y1="48" x2="456" y2="182"/>
+          <line x1="540" y1="48" x2="540" y2="182"/>
+        </g>
+
+        <text x="112" y="85" font-size="12" text-anchor="end" style="fill:var(--ink)">典型 41 ms</text>
+        <rect x="120" y="64" width="121.8" height="32" style="fill:var(--d3)"/>
+        <rect x="241.8" y="64" width="33.6" height="32" style="fill:var(--d4)"/>
+        <rect x="275.4" y="64" width="12.6" height="32" style="fill:var(--d1)"/>
+        <rect x="288" y="64" width="2.3" height="32" style="fill:var(--d5)"/>
+        <text x="126" y="85" font-size="12" style="fill:var(--surface)">感知 29</text>
+        <text x="300" y="56" font-size="12" style="fill:var(--muted-ink)">41 ms × 1.2 m/s = 4.9 cm</text>
+
+        <text x="112" y="149" font-size="12" text-anchor="end" style="fill:var(--ink)">最坏 89 ms</text>
+        <rect x="120" y="128" width="256.2" height="32" style="fill:var(--d3)"/>
+        <rect x="376.2" y="128" width="84" height="32" style="fill:var(--d4)"/>
+        <rect x="460.2" y="128" width="29.4" height="32" style="fill:var(--d1)"/>
+        <rect x="489.6" y="128" width="4.6" height="32" style="fill:var(--d5)"/>
+        <text x="126" y="149" font-size="12" style="fill:var(--surface)">感知 61</text>
+        <text x="380" y="149" font-size="12" style="fill:var(--surface)">决策 20</text>
+        <text x="300" y="120" font-size="12" style="fill:var(--muted-ink)">89 ms × 3.3 m/s = 29 cm（1.2 m/s 为 10.7 cm）</text>
+
+        <line x1="120" y1="182" x2="540" y2="182" style="stroke:var(--line-2);stroke-width:1"/>
+        <g font-size="12" text-anchor="middle" class="t-mono" style="fill:var(--muted-ink)">
+          <text x="120" y="200">0</text>
+          <text x="204" y="200">20</text>
+          <text x="288" y="200">40</text>
+          <text x="372" y="200">60</text>
+          <text x="456" y="200">80</text>
+          <text x="540" y="200">100</text>
+        </g>
+        <text x="120" y="220" font-size="12" style="fill:var(--muted-ink)">累计延迟 / ms</text>
+
+        <g font-size="12" style="fill:var(--ink-2)">
+          <rect x="120" y="236" width="10" height="10" style="fill:var(--d3)"/>
+          <text x="138" y="246">感知（相机 30 Hz）：曝光 16–33、链路 3–8、检测 10–20 ms</text>
+          <rect x="120" y="260" width="10" height="10" style="fill:var(--d4)"/>
+          <text x="138" y="270">决策（10–50 Hz）：规划或策略推理 8–20 ms</text>
+          <rect x="120" y="284" width="10" height="10" style="fill:var(--d1)"/>
+          <text x="138" y="294">控制（0.5–1 kHz）：状态估计 2–5、WBC 1–2 ms</text>
+          <rect x="120" y="308" width="10" height="10" style="fill:var(--d5)"/>
+          <text x="138" y="318">执行（1–20 kHz）：总线 0.5–1、电流环 0.05–0.1 ms</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 1.4</span>端到端延迟预算 —— 从光子打到传感器到电流环改变占空比，典型 41 ms、最坏 89 ms，感知与决策占九成。
+      <span class="fig-note read-for">读者应看出：优化 1 kHz 关节环的收益不到 1%，换相机或改策略频率才是数量级的改进。</span>
+      <span class="fig-src">来源：作者绘制，各段为公开系统与常见实现的量级；执行段的条形宽度不足 5 个单位，图上几乎看不见。</span>
+    </figcaption>
+  </figure>
+
+  <p>这张图最重要的读法是看比例：感知占 29–61 ms，决策占 8–20 ms，控制加执行不到 8 ms。把 WBC 从 1 ms 优化到 0.5 ms，省下 0.5 ms，占总预算 1%；把相机从 30 Hz 换到 60 Hz，省 16 ms，占 40%。工程顺序应该是先解决「看得晚」，再解决「算得慢」。</p>
+
+  <aside class="callout callout--warning" data-reveal>
+    <p class="callout-kicker">警告 <span>Warning</span></p>
+    <p>延迟预算按 p99 做，不按均值。相机的时间戳、传输、检测各有抖动，p99 常常是均值的 2–3 倍。按均值 41 ms 设计的系统，会在 1% 的帧上收到 90 ms 前的世界，然后恰好在那 1% 上摔。</p>
+  </aside>
+
+  <h2>五十年，三次范式转移</h2>
+
+  <p>这一节给时间一个形状：人形不是线性进步的，它换过三次范式。</p>
+
+  <ol class="timeline">
+    <li>
+      <span class="timeline-year">1973</span>
+      <div class="timeline-body">
+        <h4>WABOT-1 迈出第一步</h4>
+        <p>早稻田大学做出第一台全尺寸人形，一步约 45 s，靠预编程的关节序列移动。</p>
+      </div>
+    </li>
+    <li>
+      <span class="timeline-year">1996</span>
+      <div class="timeline-body">
+        <h4>Honda P2</h4>
+        <p>1.82 m、210 kg，第一次让人形看起来像产品：连续行走、自带控制与能源。</p>
+      </div>
+    </li>
+    <li>
+      <span class="timeline-year">2000</span>
+      <div class="timeline-body">
+        <h4>ASIMO 走进展厅</h4>
+        <p>1.20 m、52 kg，靠零力矩点（Zero-Moment Point, ZMP）预编程步态连续行走、上下楼梯。ZMP 是地面上让重力与惯性力合力矩水平分量为零的点。</p>
+      </div>
+    </li>
+    <li class="is-key">
+      <span class="timeline-year">2013</span>
+      <div class="timeline-body">
+        <h4>Atlas 与 DARPA 机器人挑战赛</h4>
+        <p>28 个自由度、外接电缆，被要求进废墟开门、拧阀、开车。2012–2015 年的 <a href="https://www.darpa.mil/program/darpa-robotics-challenge">DARPA 机器人挑战赛</a>把全身优化和接触规划逼成了主流。</p>
+      </div>
+    </li>
+    <li>
+      <span class="timeline-year">2017</span>
+      <div class="timeline-body">
+        <h4>Cassie 把腿拆出来</h4>
+        <p>10 个自由度、31 kg，用混合零动态（HZD）离线优化一条周期步态，在线只做跟踪，证明腿本身可以很便宜。</p>
+      </div>
+    </li>
+    <li class="is-key">
+      <span class="timeline-year">2024</span>
+      <div class="timeline-body">
+        <h4>学习式控制与 VLA</h4>
+        <p>2024–2025 年，Figure 02、Optimus 与 π0 把策略压到 50 Hz、底层 PD 保持 1 kHz；训练从写规则变成给奖励和喂数据。</p>
+      </div>
+    </li>
+  </ol>
+
+  <p class="small">时间轴上实心圆点（2013、2024）标出两次范式转移的转折点，空心圆点是通向它们的中间节点。</p>
+
+  <p>三次转移的分界线比年份更重要。1973–2000 年是第一次：靠预编程步态和 ZMP 把「能走」做出来，ASIMO 能在展厅里连续走，但它对地形的假设写在程序里。2000–2015 年是第二次：DRC 把机器人放进废墟，逼出了全身优化和接触规划，Atlas 从外接电缆走到自带电池。2017 年之后是第三次：Cassie 证明腿可以很便宜，Unitree 把整机价格压到 $13.5k，学习式控制把「写规则」换成「给奖励」。</p>
+
+  <p>还有两条线不在时间轴上，但决定了今天的产品形态：1986 年 Raibert 的单腿弹跳机用三条解耦规则证明动态平衡可以很简单；2022 年 Optimus 原型把目标价定在 2 万美元级，2023 年 Figure 01 把大模型接进人形，2024 年的 <a href="https://arxiv.org/abs/2410.24164">π0</a> 把视觉、语言和动作放进同一个模型。视觉-语言-动作模型（Vision-Language-Action, VLA）让「人说什么」直接映射到「手做什么」，代价是推理只有 5–10 Hz，仍然要 1 kHz 的底层去补。</p>
+
+  <h3>四篇论文，三次转移</h3>
+
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[01]</span>
+      <div>
+        <p class="paper-title">Zero-Moment Point — Thirty Five Years of Its Life</p>
+        <p class="paper-meta">Vukobratović &amp; Borovac · Int. J. Humanoid Robotics, 2004 · ZMP 的定义与 35 年误用澄清</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1142/S0219843604000083">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[02]</span>
+      <div>
+        <p class="paper-title">Biped Walking Pattern Generation by using Preview Control of Zero-Moment Point</p>
+        <p class="paper-meta">Kajita 等 · ICRA, 2003 · 把 ZMP 跟踪写成带预览的 LQR，工业级步态生成的起点</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/ROBOT.2003.1241826">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[03]</span>
+      <div>
+        <p class="paper-title">Capture Point: A Step toward Humanoid Push Recovery</p>
+        <p class="paper-meta">Pratt 等 · IEEE-RAS Humanoids, 2006 · 把「踩哪里能停住」变成闭式判据</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/ICHR.2006.321385">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[04]</span>
+      <div>
+        <p class="paper-title">Learning to Walk in Minutes Using Massively Parallel Deep Reinforcement Learning</p>
+        <p class="paper-meta">Rudin 等 · CoRL, 2021 · 4096 个并行环境把训练压到 4–20 分钟</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2109.11978">arXiv ↗</a>
+    </li>
+  </ol>
+
+  <h2>九章是一条依赖链</h2>
+
+  <p>这一节告诉你读的顺序：哪几章是承重墙，哪几章可以晚点。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 400" role="img" aria-labelledby="ch01-fig5-title ch01-fig5-desc">
+        <title id="ch01-fig5-title">九章的先修关系图</title>
+        <desc id="ch01-fig5-desc">01 指向 02、03、04；02 与 04 指向 05；05 指向 06；06 指向 07；08 指向 06 与 07；07 指向 09。02 到 04 标为先学，05 与 06 标为腰，07 与 08 标为可晚点，09 为收束。</desc>
+        <defs>
+          <marker id="ch01-fig5-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--line-2)"/>
+          </marker>
+        </defs>
+
+        <g style="stroke:var(--line-2);stroke-width:1.2;fill:none">
+          <line x1="100" y1="174" x2="126" y2="66" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="102" y1="186" x2="126" y2="150" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="100" y1="206" x2="126" y2="238" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="206" y1="72" x2="238" y2="94" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="167" y1="172" x2="167" y2="210" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="206" y1="236" x2="238" y2="122" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="279" y1="130" x2="279" y2="188" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="318" y1="212" x2="354" y2="212" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="279" y1="300" x2="279" y2="236" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="318" y1="316" x2="354" y2="232" marker-end="url(#ch01-fig5-arrow)"/>
+          <line x1="434" y1="200" x2="484" y2="152" marker-end="url(#ch01-fig5-arrow)"/>
+        </g>
+        <line x1="318" y1="104" x2="354" y2="196" style="stroke:var(--line-2);stroke-width:1.2;stroke-dasharray:4 4" marker-end="url(#ch01-fig5-arrow)"/>
+
+        <rect x="24" y="170" width="78" height="44" rx="3" style="fill:var(--surface);stroke:var(--line-2);stroke-width:1.5"/>
+        <text x="32" y="187" font-size="11" class="t-mono" style="fill:var(--muted-ink)">01</text>
+        <text x="32" y="205" font-size="13" font-weight="600" style="fill:var(--ink)">全景</text>
+
+        <rect x="128" y="44" width="78" height="44" rx="3" style="fill:var(--d1);fill-opacity:.08;stroke:var(--d1);stroke-width:1.5"/>
+        <text x="136" y="61" font-size="11" class="t-mono" style="fill:var(--muted-ink)">02</text>
+        <text x="136" y="79" font-size="13" font-weight="600" style="fill:var(--ink)">机械</text>
+
+        <rect x="128" y="128" width="78" height="44" rx="3" style="fill:var(--d1);fill-opacity:.08;stroke:var(--d1);stroke-width:1.5"/>
+        <text x="136" y="145" font-size="11" class="t-mono" style="fill:var(--muted-ink)">03</text>
+        <text x="136" y="163" font-size="13" font-weight="600" style="fill:var(--ink)">硬件</text>
+
+        <rect x="128" y="212" width="78" height="44" rx="3" style="fill:var(--d1);fill-opacity:.08;stroke:var(--d1);stroke-width:1.5"/>
+        <text x="136" y="229" font-size="11" class="t-mono" style="fill:var(--muted-ink)">04</text>
+        <text x="136" y="247" font-size="13" font-weight="600" style="fill:var(--ink)">嵌入式</text>
+
+        <rect x="240" y="86" width="78" height="44" rx="3" style="fill:var(--d2);fill-opacity:.10;stroke:var(--d2);stroke-width:1.5"/>
+        <text x="248" y="103" font-size="11" class="t-mono" style="fill:var(--muted-ink)">05</text>
+        <text x="248" y="121" font-size="13" font-weight="600" style="fill:var(--ink)">动力学</text>
+
+        <rect x="240" y="190" width="78" height="44" rx="3" style="fill:var(--d2);fill-opacity:.10;stroke:var(--d2);stroke-width:1.5"/>
+        <text x="248" y="207" font-size="11" class="t-mono" style="fill:var(--muted-ink)">06</text>
+        <text x="248" y="225" font-size="13" font-weight="600" style="fill:var(--ink)">步态</text>
+
+        <rect x="240" y="300" width="78" height="44" rx="3" style="fill:var(--d3);fill-opacity:.08;stroke:var(--d3);stroke-width:1.5"/>
+        <text x="248" y="317" font-size="11" class="t-mono" style="fill:var(--muted-ink)">08</text>
+        <text x="248" y="335" font-size="13" font-weight="600" style="fill:var(--ink)">感知</text>
+
+        <rect x="356" y="190" width="78" height="44" rx="3" style="fill:var(--d3);fill-opacity:.08;stroke:var(--d3);stroke-width:1.5"/>
+        <text x="364" y="207" font-size="11" class="t-mono" style="fill:var(--muted-ink)">07</text>
+        <text x="364" y="225" font-size="13" font-weight="600" style="fill:var(--ink)">强化学习</text>
+
+        <rect x="486" y="120" width="78" height="44" rx="3" style="fill:none;stroke:var(--line-2);stroke-width:1.5;stroke-dasharray:4 4"/>
+        <text x="494" y="137" font-size="11" class="t-mono" style="fill:var(--muted-ink)">09</text>
+        <text x="494" y="155" font-size="13" font-weight="600" style="fill:var(--ink)">路线图</text>
+
+        <g font-size="12" style="fill:var(--muted-ink)">
+          <rect x="30" y="368" width="12" height="12" style="fill:var(--d1);fill-opacity:.35"/>
+          <text x="48" y="378">先学 02–04</text>
+          <rect x="160" y="368" width="12" height="12" style="fill:var(--d2);fill-opacity:.35"/>
+          <text x="178" y="378">腰 05–06</text>
+          <rect x="290" y="368" width="12" height="12" style="fill:var(--d3);fill-opacity:.35"/>
+          <text x="308" y="378">可晚点 07–08</text>
+          <rect x="430" y="368" width="12" height="12" style="fill:none;stroke:var(--line-2);stroke-width:1.5;stroke-dasharray:3 3"/>
+          <text x="448" y="378">收束 09</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 1.5</span>九章依赖图 —— 02–04 是地基，05–06 是腰，07–08 换范式；箭头方向表示先修关系，不是数据流。
+      <span class="fig-note read-for">读者应看出：跳过 02 直接读 05 只能背结论；07、08 可以晚点，但必须建立在 05、06 之上。</span>
+      <span class="fig-src">来源：作者绘制，依据 OUTLINE 的章节依赖。</span>
+    </figcaption>
+  </figure>
+
+  <p>承重墙是 02 → 04 → 05。05 章的第一行方程要用 02 章的雅可比和连杆惯量，也要用 04 章定义的 1 kHz 力矩接口；跳过 02 直接读 05，只能背结论，算不出自己机器人的力矩。06 章是腰的另一半：WBC 只管这一毫秒，落脚点由模型预测控制（Model Predictive Control, MPC）决定——每一步重解未来 0.5–1.6 s 的轨迹，只执行第一步。腰断了，07、08 接不上。</p>
+
+  <p>可以晚点的是 07 和 08。07 章的强化学习复用 04 章的接口和 05 章的模型，先学容易变成调包；08 章的感知需要一台能站住的平台来验证估计误差，没有平台，滤波器调不出所以然。</p>
+
+  <p>必须动手的有三件：02 章手算一次 <span class="formula-inline">τ = J<sup>⊤</sup>F</span>，再用 Pinocchio 对账，误差应在 5% 以内；04 章测一次 1 kHz 任务的抖动 p99.9，写进你的选型表；07 章跑一次 Isaac 到 MuJoCo 的 sim2sim 闸门，看策略在第二个仿真器里还站不站得住。实机迁移（sim-to-real transfer）的失败，大多在这三件事里已经露头。</p>
+
+  <h2>给初学者的三条判断</h2>
+
+  <p>这一节只有三条建议，每条都能在一周内验证。</p>
+
+  <h3>先建立系统感，再学任何一个模块</h3>
+
+  <p>检验标准很具体：拿一张纸，画出六层栈，标出每层的频率和一个失败模式。画不出来，说明还在背名词。第二步是拿一台 G1 的规格表，把 23 个自由度分到六层里，写出每层你最担心的一件事——比如「膝 90 N·m 在 35 kg 上只剩 1.7 倍静力矩余量」。</p>
+
+  <h3>先做单关节台架</h3>
+
+  <p>一个 QDD 模组、一个驱动器、一个编码器、一台 48 V 电源，$200–500，就能搭出 1 kHz 的位置环。验收四项：1 Hz 正弦跟踪误差小于 0.5°，阶跃上升时间小于 80 ms，周期抖动 p99.9 小于 50 µs，堵转 30 s 温升小于 40 K。整机上排查一次振荡要一天，台架上只要十分钟，因为你可以一次只改一个变量。</p>
+
+  <h3>不要一上来就训策略</h3>
+
+  <p>顺序是：PD 站立 10 s，WBC 单腿站立 5 s，MPC 走 1 m，最后才是强化学习。理由不是 RL 难，是它的失效不可归因：策略抖，可能是观测缺了一维，可能是执行器建模太理想，也可能是 20 ms 延迟没进观测。这三件事在 PD 阶段就会暴露，在 RL 里只会变成「再训一版试试」。</p>
+
+  <section class="takeaways" data-takeaways aria-labelledby="ch01-takeaways">
+    <p class="kicker" id="ch01-takeaways">本章要点 <span>Takeaways</span></p>
+    <ol>
+      <li><strong>难在接触与带宽，不在关节数。</strong>30 个关节的位置控制是 1980 年代的问题；单边接触、欠驱动和 20 ms 延迟才是今天的问题。</li>
+      <li><strong>六层栈的频率跨四个数量级。</strong>1 Hz 的决策到 20 kHz 的电流环之间，延迟的 90% 花在 30 Hz 的相机和 10–50 Hz 的决策上。</li>
+      <li><strong>力矩预算先算再选型，除完体重还要看力臂。</strong>60 kg 参考机体单腿站立膝 88 N·m，按 d = 0.15 m 是 1.5&nbsp;N·m/kg；G1 的 2.6 只有 1.7 倍余量，H1 按 d ≈ 0.20 m 的需求约 2.0、给 7.7，余量 3.9 倍——这才是「能走」与「能跑跳」的差别。</li>
+      <li><strong>人形只在通用性上赢。</strong>任务固定、环境可改时，轮式底盘的负载自重比通常大于 1、续航 8 h 对 2 h，人形没有一项占优。</li>
+    </ol>
+  </section>
+
+  <a class="next-chapter" href="#ch-02">
+    <span class="next-kicker">下一章 · Next</span>
+    <span class="next-title">02｜机械设计：自由度、连杆与关节模组</span>
+    <span class="next-arrow" aria-hidden="true">→</span>
+  </a>
+</section>

@@ -1,0 +1,704 @@
+<section class="chapter" id="ch-06" data-chapter="06">
+  <header class="chapter-head">
+    <div class="ch-meta">
+      <span class="ch-num" aria-hidden="true">06</span>
+      <p class="kicker">Gait &amp; Model Predictive Control</p>
+    </div>
+    <h2>步态与 MPC：从 ZMP 到预测控制</h2>
+    <p class="lede">上一章的全身控制每毫秒算一次力矩，却不知道脚下一步落在哪。这一章补上那一步：用线性倒立摆把平衡压成两个状态，用零矩点和捕获点决定落点，再用 1.6 s 的凸模型预测控制（model predictive control, MPC）把两者接成滚动优化。</p>
+  </header>
+
+  <p>05 章的 QP 每秒解 1000 次，但它只回答一个问题：这一毫秒，30 个关节各出多少力矩。它不知道脚下一步该落在哪、什么时候落。这不是遗漏，是时间尺度不匹配——全身控制（Whole-Body Control, WBC）的决策周期是 1 ms，落脚的决策周期是 0.3–0.8 s，跨三个数量级。</p>
+
+  <p>代价可以用一个数说清。质心高 0.8 m 的双足，<span class="formula-inline">ω = √(9.81/0.8) = 3.50</span> rad/s。质心偏离支撑点 1 cm、初始速度为零，1 s 后偏离 16.6 cm（cosh 3.5）；如果初始速度刚好对上发散模态，同样的 1 cm 会放大成 33 cm（e<sup>3.5</sup>）。任何以毫秒为单位的反馈都追不上这个指数；唯一的办法是在误差还小的时候，用更长的视界决定下一步落在哪。</p>
+
+  <h2>步态相位：占空比是一条分界线</h2>
+  <p>这一节解决什么问题：把「走路」拆成可以数清的相位，说清每个时刻有几只脚在推地。</p>
+
+  <p>双足的一个步态周期只有三种相位：双支撑（double support，两脚同时着地）、单支撑（single support，只有一只脚着地）、摆动（swing，一只脚在空中）。相位决定两件事：支撑多边形有多大，ZMP 能放在哪；接触力能施加在哪几个点上。这两件事直接变成下一层优化的约束，所以相位不是描述，是输入。</p>
+
+  <p>占空比（duty factor）是一脚着地时间占步态周期的比例，记作 β。以 1.25 Hz、周期 0.8 s 为例：β = 0.65 时每只脚支撑 0.52 s、摆动 0.28 s，两脚同时着地的重叠是 2×0.52 − 0.8 = 0.24 s，占周期 30%，分成两段各 0.12 s。β = 0.35 时每只脚支撑 0.28 s，两脚都不在地上是 0.8 − 2×0.28 = 0.24 s，同样是 30%。同一个 30%，在走路里是双支撑，在跑步里是腾空（flight phase）。β 跨过 0.5 就换了物理：走路任何时刻至少一只脚能推地，跑步有一段时间一只脚都不能。</p>
+
+  <p>这解释了走路为什么有速度上限。平均速度是步长除以单步周期：<span class="formula-inline">v = S/T<sub>step</sub> = 2S/T<sub>cycle</sub></span>，<span class="formula-inline">T<sub>cycle</sub></span> 是一个完整周期（左右各一步），表 6.1 里的 T 用的就是它。1.3 m 高的机器人腿长 0.65 m，步长做到 0.5 m 已经很勉强；要在 β &gt; 0.5 下跑到 2.5 m/s，需要 <span class="formula-inline">T<sub>step</sub></span> = 0.2 s，也就是每秒 5 步、完整周期 0.4 s——摆动腿得在 0.2 s 内完成抬起、前摆、落地，关节峰值角速度 10 rad/s 量级。ASIMO 2011 版标称 9 km/h（2.5 m/s），那是跑步步态，靠腾空把 1/T<sub>step</sub> 提上去，不是把走路调快。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 6.1 同一台 1.3 m 双足在三种步态下的相位账本（T 为一个完整步态周期，含左右各一步；S 为单步步长，平均速度 v = 2S/T）</caption>
+      <thead>
+        <tr><th>步态</th><th class="num">周期 T（两步）</th><th class="num">步长 S</th><th class="num">平均速度</th><th class="num">占空比 β</th><th class="num">单脚支撑</th><th>双支撑 / 腾空</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>慢走</td><td class="num">0.80 s</td><td class="num">0.35 m</td><td class="num">0.88 m/s</td><td class="num">0.65</td><td class="num">0.52 s</td><td>双支撑 0.24 s</td></tr>
+        <tr><td>快走</td><td class="num">0.60 s</td><td class="num">0.48 m</td><td class="num">1.60 m/s</td><td class="num">0.60</td><td class="num">0.36 s</td><td>双支撑 0.12 s</td></tr>
+        <tr><td>跑</td><td class="num">0.42 s</td><td class="num">0.70 m</td><td class="num">3.33 m/s</td><td class="num">0.35</td><td class="num">0.15 s</td><td>腾空 0.13 s</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>图 6.1 把同一个 0.8 s 周期下的两种步态并排画出。读它的时候看两件事：支撑条的长度就是 βT，灰带的位置决定哪一段时间有两脚（或零脚）同时着地。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 300" role="img" aria-labelledby="ch06-fig1-title ch06-fig1-desc">
+      <title id="ch06-fig1-title">行走与跑步的步态相位账本</title>
+      <desc id="ch06-fig1-desc">横轴为时间 0 到 2.4 秒，步态周期 0.8 秒（1.25 Hz）。行走占空比 0.65，每只脚支撑 0.52 秒，双支撑合计 0.24 秒；跑步占空比 0.35，支撑 0.28 秒，腾空合计 0.24 秒。</desc>
+      <defs>
+        <marker id="ch06-fig1-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d2)"/>
+        </marker>
+        <marker id="ch06-fig1-arrow-d1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d1)"/>
+        </marker>
+      </defs>
+      <rect x="174.3" y="41" width="23.5" height="52" style="fill:var(--d2);fill-opacity:.18"/>
+      <rect x="331.0" y="41" width="23.5" height="52" style="fill:var(--d2);fill-opacity:.18"/>
+      <rect x="487.7" y="41" width="23.5" height="52" style="fill:var(--d2);fill-opacity:.18"/>
+      <rect x="150.8" y="133" width="23.5" height="52" style="fill:var(--d2);fill-opacity:.18"/>
+      <rect x="229.2" y="133" width="23.5" height="52" style="fill:var(--d2);fill-opacity:.18"/>
+      <rect x="307.5" y="133" width="23.5" height="52" style="fill:var(--d2);fill-opacity:.18"/>
+      <rect x="385.8" y="133" width="23.5" height="52" style="fill:var(--d2);fill-opacity:.18"/>
+      <rect x="464.2" y="133" width="23.5" height="52" style="fill:var(--d2);fill-opacity:.18"/>
+      <rect x="542.5" y="133" width="23.5" height="52" style="fill:var(--d2);fill-opacity:.18"/>
+      <rect x="96.0" y="46" width="101.8" height="18" style="fill:var(--d1)"/>
+      <rect x="197.8" y="46" width="54.8" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="174.3" y="70" width="101.8" height="18" style="fill:var(--d3)"/>
+      <rect x="276.2" y="70" width="54.8" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="96.0" y="138" width="54.8" height="18" style="fill:var(--d1)"/>
+      <rect x="150.8" y="138" width="23.5" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="174.3" y="162" width="54.8" height="18" style="fill:var(--d3)"/>
+      <rect x="229.2" y="162" width="23.5" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="252.7" y="46" width="101.8" height="18" style="fill:var(--d1)"/>
+      <rect x="354.5" y="46" width="54.8" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="331.0" y="70" width="101.8" height="18" style="fill:var(--d3)"/>
+      <rect x="432.8" y="70" width="54.8" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="252.7" y="138" width="54.8" height="18" style="fill:var(--d1)"/>
+      <rect x="307.5" y="138" width="23.5" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="331.0" y="162" width="54.8" height="18" style="fill:var(--d3)"/>
+      <rect x="385.8" y="162" width="23.5" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="409.3" y="46" width="101.8" height="18" style="fill:var(--d1)"/>
+      <rect x="511.2" y="46" width="54.8" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="487.7" y="70" width="101.8" height="18" style="fill:var(--d3)"/>
+      <rect x="589.5" y="70" width="54.8" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="409.3" y="138" width="54.8" height="18" style="fill:var(--d1)"/>
+      <rect x="464.2" y="138" width="23.5" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <rect x="487.7" y="162" width="54.8" height="18" style="fill:var(--d3)"/>
+      <rect x="542.5" y="162" width="23.5" height="18" style="fill:none;stroke:var(--line-2);stroke-width:1"/>
+      <text x="96.0" y="30.0" class="t-label" style="font-size:12px;fill:var(--ink);">行走 · 占空比 β = 0.65 · 单脚支撑 0.52 s · 单脚摆动 0.28 s</text>
+      <text x="96.0" y="122.0" class="t-label" style="font-size:12px;fill:var(--ink);">跑步 · 占空比 β = 0.35 · 单脚支撑 0.28 s · 每周期腾空 0.24 s</text>
+      <text x="86.0" y="59.0" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">左</text>
+      <text x="86.0" y="83.0" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">右</text>
+      <text x="86.0" y="151.0" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">左</text>
+      <text x="86.0" y="175.0" class="t-mono" text-anchor="end" style="font-size:11px;fill:var(--muted-ink);">右</text>
+      <line x1="186.1" y1="90" x2="186.1" y2="100" style="stroke:var(--d2);stroke-width:.8"/>
+      <text x="192.1" y="104.0" class="t-label" style="font-size:11px;fill:var(--accent-2-ink);">双支撑 0.12 s（占周期 15%）</text>
+      <line x1="162.6" y1="132" x2="162.6" y2="192" style="stroke:var(--d2);stroke-width:.8"/>
+      <text x="168.6" y="196.0" class="t-label" style="font-size:11px;fill:var(--accent-2-ink);">腾空 0.12 s（占周期 15%）</text>
+      <line x1="96" y1="222" x2="566" y2="222" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="96.0" y1="222" x2="96.0" y2="227" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="96.0" y="241.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">0.0</text>
+      <line x1="174.3" y1="222" x2="174.3" y2="227" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="174.3" y="241.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">0.4</text>
+      <line x1="252.7" y1="222" x2="252.7" y2="227" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="252.7" y="241.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">0.8</text>
+      <line x1="331.0" y1="222" x2="331.0" y2="227" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="331.0" y="241.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">1.2</text>
+      <line x1="409.3" y1="222" x2="409.3" y2="227" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="409.3" y="241.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">1.6</text>
+      <line x1="487.7" y1="222" x2="487.7" y2="227" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="487.7" y="241.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">2.0</text>
+      <line x1="566.0" y1="222" x2="566.0" y2="227" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="566.0" y="241.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">2.4</text>
+      <text x="566.0" y="214.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">时间 / s</text>
+      <rect x="96" y="266" width="20" height="9" style="fill:var(--d1)"/>
+      <text x="122.0" y="275.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">支撑相（脚在地面）</text>
+      <rect x="254" y="266" width="20" height="9" style="fill:none;stroke:var(--line-2)"/>
+      <text x="280.0" y="275.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">摆动相（脚在空中）</text>
+      <rect x="412" y="266" width="20" height="9" style="fill:var(--d2);fill-opacity:.18"/>
+      <text x="438.0" y="275.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">双支撑或腾空</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 6.1</span>行走与跑步的相位账本：同一周期 0.8 s，占空比 0.65 与 0.35，双支撑与腾空各占 30%。
+      <span class="fig-note read-for">读者应看出：占空比跨过 0.5 之后，那 30% 从「两只脚都在地上」变成「一只脚都不在地上」，支撑多边形的大小与存在性完全改变。</span>
+      <span class="fig-src">来源：作者绘制，数值由 β 与 T 直接算出。</span>
+    </figcaption>
+  </figure>
+
+  <h2>线性倒立摆：把整机压成两个状态</h2>
+  <p>这一节解决什么问题：给一个只有两个状态、却能在 1 ms 内预测 1 s 之后质心位置的模型。</p>
+
+  <p>三个假设：质心高度恒定为 z<sub>c</sub>；腿无质量；地面反力的合力通过支撑点（点足）。把这三个假设代进去，对支撑点 p 取矩。水平方向上只有地面反力一个外力，由牛顿第二定律它等于 m <span class="qddot">c</span>；竖直方向上重力与反力大小相等、方向相反。取矩时地面反力过 p 点、力臂为零，只剩两项：重力作用在质心上、水平方向偏出 (c − p)，力矩是 m g (c − p)；质心的水平加速度 m <span class="qddot">c</span> 发生在高度 z<sub>c</sub> 上，对应绕 p 的角动量变化率 m <span class="qddot">c</span> z<sub>c</sub>。两者相等——注意这不是「合力矩为零」，而是「重力矩正好推动质心继续往外倒」，c 越偏，加速度越大，所以它不稳定。约掉 m 与 z<sub>c</sub>，得到线性倒立摆模型（Linear Inverted Pendulum Model, LIPM）：</p>
+
+  <div class="formula-block">
+    <span class="formula"><span class="qddot">c</span><span class="op">=</span>ω²(c<span class="op">−</span>p),　ω<span class="op">=</span>√(g / z<sub>c</sub>)</span>
+    <span class="formula-no">6.1</span>
+  </div>
+
+  <p>其中 c 是质心水平位置，p 是零矩点水平位置，ω 是倒立摆的自然频率。记法先交代清楚：字母上一个点表示对时间的一阶导数，即速度；两个点表示二阶导数，即加速度——所以 <span class="qdot">c</span> 是质心速度、<span class="qddot">c</span> 是加速度，本章后面一直用这套记法。z<sub>c</sub> = 0.8 m 时 ω = 3.50 rad/s，时间常数 1/ω = 0.29 s，摆动周期 2π/ω = 1.79 s。</p>
+
+  <p>直觉很清楚：这就是一根倒立摆，支点在脚，质量压在 0.8 m 高处。唯一的平衡点是 c = p，而且不稳定。质心偏 1 cm、初始速度为 0，cosh 给出 0.29 s 后 1.5 cm、0.58 s 后 3.8 cm、1 s 后 16.6 cm；同一个初始偏差换到捕获点坐标下是 2.7 / 7.4 / 33 cm（见后面的「捕获点」一节），差的只是一个 e<sup>−ωt</sup> 的收敛模态。它坏掉的原因不是增益没调好，是指数本身——任何有限带宽的反馈都追不上 e<sup>ωt</sup>。</p>
+
+  <div class="formula-block">
+    <span class="formula">c(t)<span class="op">=</span>p<span class="op">+</span>(c<sub>0</sub><span class="op">−</span>p)<span class="fn">cosh</span>(ωt)<span class="op">+</span>(<span class="qdot">c</span><sub>0</sub>/ω)<span class="fn">sinh</span>(ωt)</span>
+    <span class="formula-no">6.2</span>
+  </div>
+
+  <p>cosh 与 sinh 是指数发散的对称写法，定义是 <span class="formula-inline"><span class="fn">cosh</span> x = (e<sup>x</sup> + e<sup>−x</sup>)/2</span>、<span class="formula-inline"><span class="fn">sinh</span> x = (e<sup>x</sup> − e<sup>−x</sup>)/2</span>：两个指数一个涨一个落，相加得双曲余弦，相减得双曲正弦。ωt = 1 时 cosh = 1.54、sinh = 1.18。6.2 式就是 <span class="formula-inline"><span class="qddot">c</span> = ω²(c − p)</span> 在给定 c<sub>0</sub>、<span class="qdot">c</span><sub>0</sub> 时的解：把 t = 0 代进去得 c(0) = c<sub>0</sub>，对时间求导后得 <span class="qdot">c</span>(0) = <span class="qdot">c</span><sub>0</sub>。这个闭式解的工程价值在于：给定当前 (c, <span class="qdot">c</span>)，任意时刻的位置可以直接算出，不需要积分，也不需要迭代。</p>
+
+  <p>为什么这个粗暴简化极其有用，有三条理由。第一，只剩两个状态，而且控制量 p 线性进入，预测 1.6 s 只是一串线性等式，能塞进凸 QP 并在 1–5 ms 内解完。第二，它保留了唯一危险的方向——+ω 特征值；腿的摆动、上身角动量、关节柔度都是更高频、更小幅度的次要项。第三，算错的部分有兜底：1 kHz 的 WBC 用全模型把残差吸收掉。</p>
+
+  <p>这是一笔时间尺度上的交易：上层用错模型，换 100 倍的规划速度。代价也要说清。z<sub>c</sub> 恒定意味着它描述不了上下起伏，跑步和上下楼梯必须换模型；腿无质量意味着它不知道摆动腿的惯性力，快速摆腿时这一项能到体重的 10–20%（量级估计）。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 340" role="img" aria-labelledby="ch06-fig2-title ch06-fig2-desc">
+      <title id="ch06-fig2-title">线性倒立摆模型的侧视几何</title>
+      <desc id="ch06-fig2-desc">地面上的支撑点 p 到质心连一条无质量腿，质心高度恒为 0.8 米。质心偏离支撑点 0.25 米时，水平加速度为 3.07 米每二次方秒，方向背离支撑点——这正是模型不稳定的原因。</desc>
+      <defs>
+        <marker id="ch06-fig2-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d2)"/>
+        </marker>
+        <marker id="ch06-fig2-arrow-d1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d1)"/>
+        </marker>
+      </defs>
+      <line x1="40" y1="284" x2="560" y2="284" style="stroke:var(--ink-2);stroke-width:1.5"/>
+      <line x1="44" y1="284" x2="36" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="64" y1="284" x2="56" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="84" y1="284" x2="76" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="104" y1="284" x2="96" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="124" y1="284" x2="116" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="144" y1="284" x2="136" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="164" y1="284" x2="156" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="184" y1="284" x2="176" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="204" y1="284" x2="196" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="224" y1="284" x2="216" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="244" y1="284" x2="236" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="264" y1="284" x2="256" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="284" y1="284" x2="276" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="304" y1="284" x2="296" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="324" y1="284" x2="316" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="344" y1="284" x2="336" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="364" y1="284" x2="356" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="384" y1="284" x2="376" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="404" y1="284" x2="396" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="424" y1="284" x2="416" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="444" y1="284" x2="436" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="464" y1="284" x2="456" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="484" y1="284" x2="476" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="504" y1="284" x2="496" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="524" y1="284" x2="516" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="544" y1="284" x2="536" y2="293" style="stroke:var(--line-2);stroke-width:.8"/>
+      <rect x="272" y="276" width="48" height="8" style="fill:var(--d1);fill-opacity:.22;stroke:var(--d1);stroke-width:1.2"/>
+      <line x1="296" y1="284" x2="346.0" y2="124.0" style="stroke:var(--ink-2);stroke-width:2"/>
+      <circle cx="346.0" cy="124.0" r="9" style="fill:var(--paper);stroke:var(--d1);stroke-width:1.5"/>
+      <circle cx="346.0" cy="124.0" r="2.5" style="fill:var(--d1)"/>
+      <line x1="346.0" y1="136.0" x2="346.0" y2="188.0" marker-end="url(#ch06-fig2-arrow)" style="stroke:var(--d2);stroke-width:1.5"/>
+      <text x="356.0" y="170.0" class="t-mono" style="font-size:11px;fill:var(--accent-2-ink);">m g = 589 N</text>
+      <line x1="358.0" y1="122.0" x2="392.0" y2="122.0" marker-end="url(#ch06-fig2-arrow-d1)" style="stroke:var(--d1);stroke-width:1.5"/>
+      <text x="408.0" y="114.0" class="t-mono" style="font-size:11px;fill:var(--accent);">a = 3.07 m/s²</text>
+      <text x="334.0" y="112.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--accent);">质心 m</text>
+      <line x1="296" y1="90.0" x2="346.0" y2="90.0" style="stroke:var(--line-2);stroke-width:.8;stroke-dasharray:3 3"/>
+      <line x1="296" y1="85.0" x2="296" y2="95.0" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="346.0" y1="85.0" x2="346.0" y2="95.0" style="stroke:var(--line-2);stroke-width:.8"/>
+      <text x="321.0" y="82.0" class="t-mono" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">c − p = 0.25 m</text>
+      <line x1="400.0" y1="284" x2="400.0" y2="124.0" style="stroke:var(--line-2);stroke-width:.8;stroke-dasharray:3 3"/>
+      <line x1="395.0" y1="284" x2="405.0" y2="284" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="395.0" y1="124.0" x2="405.0" y2="124.0" style="stroke:var(--line-2);stroke-width:.8"/>
+      <text x="408.0" y="208.0" class="t-mono" style="font-size:11px;fill:var(--muted-ink);">z<tspan font-size="8" dy="3">c</tspan><tspan dy="-3"> = 0.80 m</tspan></text>
+      <text x="296.0" y="314.0" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--accent);">p（ZMP，支撑脚中心）</text>
+      <rect x="30" y="24" width="238" height="76" style="fill:var(--surface);stroke:var(--line);stroke-width:1"/>
+      <text x="44.0" y="48.0" class="t-mono" style="font-size:15px;fill:var(--ink);">a = ω² (x − p)</text>
+      <text x="44.0" y="68.0" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">ω = √(g / z<tspan font-size="8" dy="3">c</tspan><tspan dy="-3">) = 3.50 rad/s</tspan></text>
+      <text x="44.0" y="88.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">1/ω = 0.29 s（误差放大 e 倍）</text>
+      <text x="40.0" y="326.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">腿视为无质量、质心高度恒定：模型只剩 x 与 v 两个状态，输入是落点 p。</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 6.2</span>LIPM 的侧视几何：支点在支撑脚，质心高度恒为 0.80 m，水平偏移 0.25 m 产生 3.07 m/s² 的水平加速度，方向背离支撑点。
+      <span class="fig-note read-for">读者应看出：模型的全部自由度只有 c 与 <span class="qdot">c</span> 两个，输入只有一个落点 p；腿的质量与关节被整体丢弃，换来的是可解析、可预测。</span>
+      <span class="fig-src">来源：作者绘制，按 m = 60 kg、z<sub>c</sub> = 0.8 m 计算。</span>
+    </figcaption>
+  </figure>
+
+  <h2>零矩点：支撑多边形里的一个点</h2>
+  <p>这一节解决什么问题：给出一个能画在脚底、能写成线性约束的几何量。</p>
+
+  <p>零矩点（Zero-Moment Point, ZMP）是地面上使地面反力合力矩的水平分量为零的点。把 LIPM 的加速度代回去，得到它的等价定义：</p>
+
+  <div class="formula-block">
+    <span class="formula">p = c − (z<sub>c</sub> / g) <span class="qddot">c</span> = c − <span class="qddot">c</span> / ω²</span>
+    <span class="formula-no">6.3</span>
+  </div>
+
+  <p>读法是：ZMP 是质心加速度的反作用点。质心往前加速，ZMP 必须往后挪；质心要减速，ZMP 往前挪。所以所有 ZMP 步态生成器都有同一个结构——先规划 ZMP，再反解质心，脚先动、质心后动。</p>
+
+  <p>没有角动量时，ZMP 与压力中心（Center of Pressure, CoP）重合；有上身或飞轮角动量 L 时，两者差 <span class="formula-inline"><span class="qdot">L</span> / (m g)</span>。ASIMO 挥手臂时这个差值是几毫米到几厘米（量级估计），所以工程上用足底力传感器测 CoP，而不是解析算 ZMP。</p>
+
+  <p>支撑多边形（support polygon）是接触点的凸包：单脚支撑时是脚掌轮廓（约 0.24 m × 0.10 m），双支撑时是两只脚的凸包。ZMP 落在内部，等价于存在一组非负的地面反力能实现它；落在外面，等价于需要脚去「抓」地面——物理上不存在。</p>
+
+  <p>踝关节的权限可以算出来。要把 ZMP 推到脚掌前部，踝需要力矩 τ = F<sub>z</sub>·d，于是最大偏移 d = τ/(m g)。60 kg 整机、踝 59 N·m（H1 量级）给出 d = 0.10 m，对应质心加速度 ω²×0.10 = 1.2 m/s²，约 0.12 g。靠踝关节你只有 0.12 g 的水平加速度权限，再多就必须换支撑点。这是「为什么必须迈步」的定量版本，也解释了为什么脚小的机器人走不快。</p>
+
+  <p>ZMP 有三个局限。腾空时它不存在——没有地面反力就没有 ZMP，跑步和跳跃要换模型。它不给力矩——ZMP 是运动学等效点，变成 30 个关节的力矩还要一步逆解。它是二阶微分——1 mm 的位置噪声在 1 kHz 采样下被放大到 1 mm/(1 ms)² = 1000 m/s² 量级，所以实机不微分，直接用六维力传感器测 CoP。</p>
+
+  <aside class="callout callout--warning" data-reveal>
+    <p class="callout-kicker">警告 <span>Warning</span></p>
+    <p>「ZMP 出了支撑多边形就一定会摔」是错的。出界只说明当前这一步的接触维持不住；只要下一步能落到捕获点附近，机器人可以救回来。把 ZMP 当稳定判据的控制器，会在最该迈步的时候选择刹车，然后在原地倒下。</p>
+  </aside>
+
+  <h2>捕获点：把速度误差兑换成落点</h2>
+  <p>这一节解决什么问题：把「要不要迈步、迈到哪」变成一个闭式公式。</p>
+
+  <p>定义发散运动分量（Divergent Component of Motion, DCM）：</p>
+
+  <div class="formula-block">
+    <span class="formula">ξ = c + <span class="qdot">c</span> / ω,　<span class="qdot">ξ</span> = ω (ξ − p)</span>
+    <span class="formula-no">6.4</span>
+  </div>
+
+  <p>直觉是把 (c, <span class="qdot">c</span>) 分解成两个模态：一个按 e<sup>−ωt</sup> 收敛，记作 χ = c − <span class="qdot">c</span>/ω；一个按 e<sup>+ωt</sup> 发散，就是 ξ。收敛的那个不用管，发散的那个必须处理。ξ 的单位是米，可以直接画在地面上，这是它比 (c, <span class="qdot">c</span>) 好用的原因。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 340" role="img" aria-labelledby="ch06-fig3-title ch06-fig3-desc">
+      <title id="ch06-fig3-title">线性倒立摆的相平面与捕获点</title>
+      <desc id="ch06-fig3-desc">横轴为质心相对支撑点的偏移 x 减 p，单位米，范围正负 0.4；纵轴为质心速度，单位米每秒，范围正负 1.6。双曲线是脚不动时的轨迹，斜率为负 ω 的直线与横轴的交点就是捕获点。</desc>
+      <defs>
+        <marker id="ch06-fig3-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d2)"/>
+        </marker>
+        <marker id="ch06-fig3-arrow-d1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d1)"/>
+        </marker>
+      </defs>
+      <line x1="143.0" y1="34" x2="143.0" y2="262" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="202.0" y1="34" x2="202.0" y2="262" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="261.0" y1="34" x2="261.0" y2="262" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="379.0" y1="34" x2="379.0" y2="262" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="438.0" y1="34" x2="438.0" y2="262" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="497.0" y1="34" x2="497.0" y2="262" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="84" y1="233.5" x2="556" y2="233.5" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="84" y1="205.0" x2="556" y2="205.0" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="84" y1="176.5" x2="556" y2="176.5" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="84" y1="119.5" x2="556" y2="119.5" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="84" y1="91.0" x2="556" y2="91.0" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="84" y1="62.5" x2="556" y2="62.5" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <line x1="84" y1="148.0" x2="556" y2="148.0" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="320.0" y1="34" x2="320.0" y2="262" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="84.0" y="163.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">-0.4</text>
+      <text x="202.0" y="163.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">-0.2</text>
+      <text x="438.0" y="163.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">0.2</text>
+      <text x="556.0" y="163.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">0.4</text>
+      <text x="314.0" y="266.0" class="t-mono" text-anchor="end" style="font-size:10px;fill:var(--muted-ink);">-1.6</text>
+      <text x="314.0" y="209.0" class="t-mono" text-anchor="end" style="font-size:10px;fill:var(--muted-ink);">-0.8</text>
+      <text x="314.0" y="95.0" class="t-mono" text-anchor="end" style="font-size:10px;fill:var(--muted-ink);">0.8</text>
+      <text x="314.0" y="38.0" class="t-mono" text-anchor="end" style="font-size:10px;fill:var(--muted-ink);">1.6</text>
+      <text x="556.0" y="286.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">c − p / m</text>
+      <text x="84.0" y="26.0" class="t-label" style="font-size:12px;fill:var(--muted-ink);">v / (m/s)</text>
+      <polyline points="84.0,47.2 87.9,48.8 91.9,50.5 95.8,52.1 99.7,53.8 103.7,55.4 107.6,57.1 111.5,58.7 115.5,60.3 119.4,62.0 123.3,63.6 127.3,65.3 131.2,66.9 135.1,68.5 139.1,70.2 143.0,71.8 146.9,73.4 150.9,75.1 154.8,76.7 158.7,78.3 162.7,80.0 166.6,81.6 170.5,83.2 174.5,84.8 178.4,86.4 182.3,88.1 186.3,89.7 190.2,91.3 194.1,92.9 198.1,94.5 202.0,96.1 205.9,97.7 209.9,99.3 213.8,100.9 217.7,102.5 221.7,104.0 225.6,105.6 229.5,107.2 233.5,108.7 237.4,110.3 241.3,111.8 245.3,113.3 249.2,114.8 253.1,116.3 257.1,117.8 261.0,119.3 264.9,120.7 268.9,122.1 272.8,123.5 276.7,124.8 280.7,126.1 284.6,127.3 288.5,128.5 292.5,129.6 296.4,130.6 300.3,131.5 304.3,132.3 308.2,132.9 312.1,133.4 316.1,133.7 320.0,133.8 323.9,133.7 327.9,133.4 331.8,132.9 335.7,132.3 339.7,131.5 343.6,130.6 347.5,129.6 351.5,128.5 355.4,127.3 359.3,126.1 363.3,124.8 367.2,123.5 371.1,122.1 375.1,120.7 379.0,119.3 382.9,117.8 386.9,116.3 390.8,114.8 394.7,113.3 398.7,111.8 402.6,110.3 406.5,108.7 410.5,107.2 414.4,105.6 418.3,104.0 422.3,102.5 426.2,100.9 430.1,99.3 434.1,97.7 438.0,96.1 441.9,94.5 445.9,92.9 449.8,91.3 453.7,89.7 457.7,88.1 461.6,86.4 465.5,84.8 469.5,83.2 473.4,81.6 477.3,80.0 481.3,78.3 485.2,76.7 489.1,75.1 493.1,73.4 497.0,71.8 500.9,70.2 504.9,68.5 508.8,66.9 512.7,65.3 516.7,63.6 520.6,62.0 524.5,60.3 528.5,58.7 532.4,57.1 536.3,55.4 540.3,53.8 544.2,52.1 548.1,50.5 552.1,48.8 556.0,47.2" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <polyline points="84.0,248.8 87.9,247.2 91.9,245.5 95.8,243.9 99.7,242.2 103.7,240.6 107.6,238.9 111.5,237.3 115.5,235.7 119.4,234.0 123.3,232.4 127.3,230.7 131.2,229.1 135.1,227.5 139.1,225.8 143.0,224.2 146.9,222.6 150.9,220.9 154.8,219.3 158.7,217.7 162.7,216.0 166.6,214.4 170.5,212.8 174.5,211.2 178.4,209.6 182.3,207.9 186.3,206.3 190.2,204.7 194.1,203.1 198.1,201.5 202.0,199.9 205.9,198.3 209.9,196.7 213.8,195.1 217.7,193.5 221.7,192.0 225.6,190.4 229.5,188.8 233.5,187.3 237.4,185.7 241.3,184.2 245.3,182.7 249.2,181.2 253.1,179.7 257.1,178.2 261.0,176.7 264.9,175.3 268.9,173.9 272.8,172.5 276.7,171.2 280.7,169.9 284.6,168.7 288.5,167.5 292.5,166.4 296.4,165.4 300.3,164.5 304.3,163.7 308.2,163.1 312.1,162.6 316.1,162.3 320.0,162.2 323.9,162.3 327.9,162.6 331.8,163.1 335.7,163.7 339.7,164.5 343.6,165.4 347.5,166.4 351.5,167.5 355.4,168.7 359.3,169.9 363.3,171.2 367.2,172.5 371.1,173.9 375.1,175.3 379.0,176.7 382.9,178.2 386.9,179.7 390.8,181.2 394.7,182.7 398.7,184.2 402.6,185.7 406.5,187.3 410.5,188.8 414.4,190.4 418.3,192.0 422.3,193.5 426.2,195.1 430.1,196.7 434.1,198.3 438.0,199.9 441.9,201.5 445.9,203.1 449.8,204.7 453.7,206.3 457.7,207.9 461.6,209.6 465.5,211.2 469.5,212.8 473.4,214.4 477.3,216.0 481.3,217.7 485.2,219.3 489.1,220.9 493.1,222.6 497.0,224.2 500.9,225.8 504.9,227.5 508.8,229.1 512.7,230.7 516.7,232.4 520.6,234.0 524.5,235.7 528.5,237.3 532.4,238.9 536.3,240.6 540.3,242.2 544.2,243.9 548.1,245.5 552.1,247.2 556.0,248.8" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <polyline points="84.0,43.8 87.9,45.4 91.9,47.0 95.8,48.6 99.7,50.2 103.7,51.7 107.6,53.3 111.5,54.9 115.5,56.5 119.4,58.0 123.3,59.6 127.3,61.2 131.2,62.7 135.1,64.3 139.1,65.8 143.0,67.4 146.9,68.9 150.9,70.5 154.8,72.0 158.7,73.5 162.7,75.0 166.6,76.6 170.5,78.1 174.5,79.6 178.4,81.1 182.3,82.5 186.3,84.0 190.2,85.5 194.1,86.9 198.1,88.4 202.0,89.8 205.9,91.2 209.9,92.6 213.8,94.0 217.7,95.4 221.7,96.8 225.6,98.1 229.5,99.4 233.5,100.7 237.4,102.0 241.3,103.3 245.3,104.5 249.2,105.7 253.1,106.8 257.1,108.0 261.0,109.0 264.9,110.1 268.9,111.1 272.8,112.0 276.7,112.9 280.7,113.8 284.6,114.5 288.5,115.2 292.5,115.9 296.4,116.5 300.3,116.9 304.3,117.3 308.2,117.7 312.1,117.9 316.1,118.0 320.0,118.1 323.9,118.0 327.9,117.9 331.8,117.7 335.7,117.3 339.7,116.9 343.6,116.5 347.5,115.9 351.5,115.2 355.4,114.5 359.3,113.8 363.3,112.9 367.2,112.0 371.1,111.1 375.1,110.1 379.0,109.0 382.9,108.0 386.9,106.8 390.8,105.7 394.7,104.5 398.7,103.3 402.6,102.0 406.5,100.7 410.5,99.4 414.4,98.1 418.3,96.8 422.3,95.4 426.2,94.0 430.1,92.6 434.1,91.2 438.0,89.8 441.9,88.4 445.9,86.9 449.8,85.5 453.7,84.0 457.7,82.5 461.6,81.1 465.5,79.6 469.5,78.1 473.4,76.6 477.3,75.0 481.3,73.5 485.2,72.0 489.1,70.5 493.1,68.9 497.0,67.4 500.9,65.8 504.9,64.3 508.8,62.7 512.7,61.2 516.7,59.6 520.6,58.0 524.5,56.5 528.5,54.9 532.4,53.3 536.3,51.7 540.3,50.2 544.2,48.6 548.1,47.0 552.1,45.4 556.0,43.8" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <polyline points="84.0,252.2 87.9,250.6 91.9,249.0 95.8,247.4 99.7,245.8 103.7,244.3 107.6,242.7 111.5,241.1 115.5,239.5 119.4,238.0 123.3,236.4 127.3,234.8 131.2,233.3 135.1,231.7 139.1,230.2 143.0,228.6 146.9,227.1 150.9,225.5 154.8,224.0 158.7,222.5 162.7,221.0 166.6,219.4 170.5,217.9 174.5,216.4 178.4,214.9 182.3,213.5 186.3,212.0 190.2,210.5 194.1,209.1 198.1,207.6 202.0,206.2 205.9,204.8 209.9,203.4 213.8,202.0 217.7,200.6 221.7,199.2 225.6,197.9 229.5,196.6 233.5,195.3 237.4,194.0 241.3,192.7 245.3,191.5 249.2,190.3 253.1,189.2 257.1,188.0 261.0,187.0 264.9,185.9 268.9,184.9 272.8,184.0 276.7,183.1 280.7,182.2 284.6,181.5 288.5,180.8 292.5,180.1 296.4,179.5 300.3,179.1 304.3,178.7 308.2,178.3 312.1,178.1 316.1,178.0 320.0,177.9 323.9,178.0 327.9,178.1 331.8,178.3 335.7,178.7 339.7,179.1 343.6,179.5 347.5,180.1 351.5,180.8 355.4,181.5 359.3,182.2 363.3,183.1 367.2,184.0 371.1,184.9 375.1,185.9 379.0,187.0 382.9,188.0 386.9,189.2 390.8,190.3 394.7,191.5 398.7,192.7 402.6,194.0 406.5,195.3 410.5,196.6 414.4,197.9 418.3,199.2 422.3,200.6 426.2,202.0 430.1,203.4 434.1,204.8 438.0,206.2 441.9,207.6 445.9,209.1 449.8,210.5 453.7,212.0 457.7,213.5 461.6,214.9 465.5,216.4 469.5,217.9 473.4,219.4 477.3,221.0 481.3,222.5 485.2,224.0 489.1,225.5 493.1,227.1 497.0,228.6 500.9,230.2 504.9,231.7 508.8,233.3 512.7,234.8 516.7,236.4 520.6,238.0 524.5,239.5 528.5,241.1 532.4,242.7 536.3,244.3 540.3,245.8 544.2,247.4 548.1,249.0 552.1,250.6 556.0,252.2" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <polyline points="84.0,37.1 87.9,38.6 91.9,40.0 95.8,41.5 99.7,43.0 103.7,44.5 107.6,45.9 111.5,47.4 115.5,48.9 119.4,50.3 123.3,51.7 127.3,53.2 131.2,54.6 135.1,56.0 139.1,57.4 143.0,58.8 146.9,60.2 150.9,61.6 154.8,63.0 158.7,64.3 162.7,65.7 166.6,67.0 170.5,68.4 174.5,69.7 178.4,71.0 182.3,72.3 186.3,73.5 190.2,74.8 194.1,76.0 198.1,77.2 202.0,78.4 205.9,79.6 209.9,80.8 213.8,81.9 217.7,83.1 221.7,84.2 225.6,85.2 229.5,86.3 233.5,87.3 237.4,88.3 241.3,89.2 245.3,90.2 249.2,91.0 253.1,91.9 257.1,92.7 261.0,93.5 264.9,94.2 268.9,94.9 272.8,95.6 276.7,96.2 280.7,96.8 284.6,97.3 288.5,97.8 292.5,98.2 296.4,98.5 300.3,98.8 304.3,99.1 308.2,99.3 312.1,99.4 316.1,99.5 320.0,99.6 323.9,99.5 327.9,99.4 331.8,99.3 335.7,99.1 339.7,98.8 343.6,98.5 347.5,98.2 351.5,97.8 355.4,97.3 359.3,96.8 363.3,96.2 367.2,95.6 371.1,94.9 375.1,94.2 379.0,93.5 382.9,92.7 386.9,91.9 390.8,91.0 394.7,90.2 398.7,89.2 402.6,88.3 406.5,87.3 410.5,86.3 414.4,85.2 418.3,84.2 422.3,83.1 426.2,81.9 430.1,80.8 434.1,79.6 438.0,78.4 441.9,77.2 445.9,76.0 449.8,74.8 453.7,73.5 457.7,72.3 461.6,71.0 465.5,69.7 469.5,68.4 473.4,67.0 477.3,65.7 481.3,64.3 485.2,63.0 489.1,61.6 493.1,60.2 497.0,58.8 500.9,57.4 504.9,56.0 508.8,54.6 512.7,53.2 516.7,51.7 520.6,50.3 524.5,48.9 528.5,47.4 532.4,45.9 536.3,44.5 540.3,43.0 544.2,41.5 548.1,40.0 552.1,38.6 556.0,37.1" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <polyline points="84.0,258.9 87.9,257.4 91.9,256.0 95.8,254.5 99.7,253.0 103.7,251.5 107.6,250.1 111.5,248.6 115.5,247.1 119.4,245.7 123.3,244.3 127.3,242.8 131.2,241.4 135.1,240.0 139.1,238.6 143.0,237.2 146.9,235.8 150.9,234.4 154.8,233.0 158.7,231.7 162.7,230.3 166.6,229.0 170.5,227.6 174.5,226.3 178.4,225.0 182.3,223.7 186.3,222.5 190.2,221.2 194.1,220.0 198.1,218.8 202.0,217.6 205.9,216.4 209.9,215.2 213.8,214.1 217.7,212.9 221.7,211.8 225.6,210.8 229.5,209.7 233.5,208.7 237.4,207.7 241.3,206.8 245.3,205.8 249.2,205.0 253.1,204.1 257.1,203.3 261.0,202.5 264.9,201.8 268.9,201.1 272.8,200.4 276.7,199.8 280.7,199.2 284.6,198.7 288.5,198.2 292.5,197.8 296.4,197.5 300.3,197.2 304.3,196.9 308.2,196.7 312.1,196.6 316.1,196.5 320.0,196.4 323.9,196.5 327.9,196.6 331.8,196.7 335.7,196.9 339.7,197.2 343.6,197.5 347.5,197.8 351.5,198.2 355.4,198.7 359.3,199.2 363.3,199.8 367.2,200.4 371.1,201.1 375.1,201.8 379.0,202.5 382.9,203.3 386.9,204.1 390.8,205.0 394.7,205.8 398.7,206.8 402.6,207.7 406.5,208.7 410.5,209.7 414.4,210.8 418.3,211.8 422.3,212.9 426.2,214.1 430.1,215.2 434.1,216.4 438.0,217.6 441.9,218.8 445.9,220.0 449.8,221.2 453.7,222.5 457.7,223.7 461.6,225.0 465.5,226.3 469.5,227.6 473.4,229.0 477.3,230.3 481.3,231.7 485.2,233.0 489.1,234.4 493.1,235.8 497.0,237.2 500.9,238.6 504.9,240.0 508.8,241.4 512.7,242.8 516.7,244.3 520.6,245.7 524.5,247.1 528.5,248.6 532.4,250.1 536.3,251.5 540.3,253.0 544.2,254.5 548.1,256.0 552.1,257.4 556.0,258.9" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <polyline points="103.7,34.2 107.6,35.5 111.5,36.9 115.5,38.2 119.4,39.5 123.3,40.8 127.3,42.1 131.2,43.3 135.1,44.6 139.1,45.8 143.0,47.1 146.9,48.3 150.9,49.5 154.8,50.7 158.7,51.9 162.7,53.1 166.6,54.2 170.5,55.4 174.5,56.5 178.4,57.6 182.3,58.7 186.3,59.8 190.2,60.9 194.1,61.9 198.1,62.9 202.0,63.9 205.9,64.9 209.9,65.8 213.8,66.8 217.7,67.7 221.7,68.6 225.6,69.4 229.5,70.2 233.5,71.1 237.4,71.8 241.3,72.6 245.3,73.3 249.2,74.0 253.1,74.6 257.1,75.3 261.0,75.9 264.9,76.4 268.9,76.9 272.8,77.4 276.7,77.9 280.7,78.3 284.6,78.7 288.5,79.0 292.5,79.3 296.4,79.6 300.3,79.8 304.3,80.0 308.2,80.1 312.1,80.2 316.1,80.3 320.0,80.3 323.9,80.3 327.9,80.2 331.8,80.1 335.7,80.0 339.7,79.8 343.6,79.6 347.5,79.3 351.5,79.0 355.4,78.7 359.3,78.3 363.3,77.9 367.2,77.4 371.1,76.9 375.1,76.4 379.0,75.9 382.9,75.3 386.9,74.6 390.8,74.0 394.7,73.3 398.7,72.6 402.6,71.8 406.5,71.1 410.5,70.2 414.4,69.4 418.3,68.6 422.3,67.7 426.2,66.8 430.1,65.8 434.1,64.9 438.0,63.9 441.9,62.9 445.9,61.9 449.8,60.9 453.7,59.8 457.7,58.7 461.6,57.6 465.5,56.5 469.5,55.4 473.4,54.2 477.3,53.1 481.3,51.9 485.2,50.7 489.1,49.5 493.1,48.3 497.0,47.1 500.9,45.8 504.9,44.6 508.8,43.3 512.7,42.1 516.7,40.8 520.6,39.5 524.5,38.2 528.5,36.9 532.4,35.5 536.3,34.2" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <polyline points="103.7,261.8 107.6,260.5 111.5,259.1 115.5,257.8 119.4,256.5 123.3,255.2 127.3,253.9 131.2,252.7 135.1,251.4 139.1,250.2 143.0,248.9 146.9,247.7 150.9,246.5 154.8,245.3 158.7,244.1 162.7,242.9 166.6,241.8 170.5,240.6 174.5,239.5 178.4,238.4 182.3,237.3 186.3,236.2 190.2,235.1 194.1,234.1 198.1,233.1 202.0,232.1 205.9,231.1 209.9,230.2 213.8,229.2 217.7,228.3 221.7,227.4 225.6,226.6 229.5,225.8 233.5,224.9 237.4,224.2 241.3,223.4 245.3,222.7 249.2,222.0 253.1,221.4 257.1,220.7 261.0,220.1 264.9,219.6 268.9,219.1 272.8,218.6 276.7,218.1 280.7,217.7 284.6,217.3 288.5,217.0 292.5,216.7 296.4,216.4 300.3,216.2 304.3,216.0 308.2,215.9 312.1,215.8 316.1,215.7 320.0,215.7 323.9,215.7 327.9,215.8 331.8,215.9 335.7,216.0 339.7,216.2 343.6,216.4 347.5,216.7 351.5,217.0 355.4,217.3 359.3,217.7 363.3,218.1 367.2,218.6 371.1,219.1 375.1,219.6 379.0,220.1 382.9,220.7 386.9,221.4 390.8,222.0 394.7,222.7 398.7,223.4 402.6,224.2 406.5,224.9 410.5,225.8 414.4,226.6 418.3,227.4 422.3,228.3 426.2,229.2 430.1,230.2 434.1,231.1 438.0,232.1 441.9,233.1 445.9,234.1 449.8,235.1 453.7,236.2 457.7,237.3 461.6,238.4 465.5,239.5 469.5,240.6 473.4,241.8 477.3,242.9 481.3,244.1 485.2,245.3 489.1,246.5 493.1,247.7 497.0,248.9 500.9,250.2 504.9,251.4 508.8,252.7 512.7,253.9 516.7,255.2 520.6,256.5 524.5,257.8 528.5,259.1 532.4,260.5 536.3,261.8" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <polyline points="154.8,34.8 158.7,35.8 162.7,36.8 166.6,37.8 170.5,38.8 174.5,39.7 178.4,40.7 182.3,41.6 186.3,42.5 190.2,43.4 194.1,44.2 198.1,45.1 202.0,45.9 205.9,46.7 209.9,47.5 213.8,48.3 217.7,49.0 221.7,49.7 225.6,50.4 229.5,51.1 233.5,51.7 237.4,52.3 241.3,52.9 245.3,53.5 249.2,54.0 253.1,54.6 257.1,55.0 261.0,55.5 264.9,55.9 268.9,56.4 272.8,56.7 276.7,57.1 280.7,57.4 284.6,57.7 288.5,57.9 292.5,58.2 296.4,58.4 300.3,58.6 304.3,58.7 308.2,58.8 312.1,58.9 316.1,58.9 320.0,58.9 323.9,58.9 327.9,58.9 331.8,58.8 335.7,58.7 339.7,58.6 343.6,58.4 347.5,58.2 351.5,57.9 355.4,57.7 359.3,57.4 363.3,57.1 367.2,56.7 371.1,56.4 375.1,55.9 379.0,55.5 382.9,55.0 386.9,54.6 390.8,54.0 394.7,53.5 398.7,52.9 402.6,52.3 406.5,51.7 410.5,51.1 414.4,50.4 418.3,49.7 422.3,49.0 426.2,48.3 430.1,47.5 434.1,46.7 438.0,45.9 441.9,45.1 445.9,44.2 449.8,43.4 453.7,42.5 457.7,41.6 461.6,40.7 465.5,39.7 469.5,38.8 473.4,37.8 477.3,36.8 481.3,35.8 485.2,34.8" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <polyline points="154.8,261.2 158.7,260.2 162.7,259.2 166.6,258.2 170.5,257.2 174.5,256.3 178.4,255.3 182.3,254.4 186.3,253.5 190.2,252.6 194.1,251.8 198.1,250.9 202.0,250.1 205.9,249.3 209.9,248.5 213.8,247.7 217.7,247.0 221.7,246.3 225.6,245.6 229.5,244.9 233.5,244.3 237.4,243.7 241.3,243.1 245.3,242.5 249.2,242.0 253.1,241.4 257.1,241.0 261.0,240.5 264.9,240.1 268.9,239.6 272.8,239.3 276.7,238.9 280.7,238.6 284.6,238.3 288.5,238.1 292.5,237.8 296.4,237.6 300.3,237.4 304.3,237.3 308.2,237.2 312.1,237.1 316.1,237.1 320.0,237.1 323.9,237.1 327.9,237.1 331.8,237.2 335.7,237.3 339.7,237.4 343.6,237.6 347.5,237.8 351.5,238.1 355.4,238.3 359.3,238.6 363.3,238.9 367.2,239.3 371.1,239.6 375.1,240.1 379.0,240.5 382.9,241.0 386.9,241.4 390.8,242.0 394.7,242.5 398.7,243.1 402.6,243.7 406.5,244.3 410.5,244.9 414.4,245.6 418.3,246.3 422.3,247.0 426.2,247.7 430.1,248.5 434.1,249.3 438.0,250.1 441.9,250.9 445.9,251.8 449.8,252.6 453.7,253.5 457.7,254.4 461.6,255.3 465.5,256.3 469.5,257.2 473.4,258.2 477.3,259.2 481.3,260.2 485.2,261.2" style="fill:none;stroke:var(--d3);stroke-width:.9;stroke-opacity:.5"/>
+      <line x1="95.80000000000001" y1="242.7625" x2="544.2" y2="53.2375" style="stroke:var(--d1);stroke-width:1.5"/>
+      <line x1="95.80000000000001" y1="53.2375" x2="544.2" y2="242.7625" style="stroke:var(--d4);stroke-width:1.2;stroke-dasharray:6 4"/>
+      <line x1="432.1" y1="103.825" x2="473.4" y2="86.725" marker-end="url(#ch06-fig3-arrow-d1)" style="stroke:var(--d1);stroke-width:1.2"/>
+      <line x1="207.9" y1="192.175" x2="166.6" y2="209.275" marker-end="url(#ch06-fig3-arrow-d1)" style="stroke:var(--d1);stroke-width:1.2"/>
+      <line x1="84" y1="312" x2="110" y2="312" style="stroke:var(--d1);stroke-width:1.5"/>
+      <text x="116.0" y="316.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">不稳定流形 v = ωu</text>
+      <line x1="262" y1="312" x2="288" y2="312" style="stroke:var(--d4);stroke-width:1.2;stroke-dasharray:6 4"/>
+      <text x="294.0" y="316.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">稳定流形 v = −ωu</text>
+      <line x1="440" y1="312" x2="466" y2="312" style="stroke:var(--d3);stroke-width:.9;stroke-opacity:.6"/>
+      <text x="472.0" y="316.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">脚不动时的轨迹</text>
+      <line x1="349.5" y1="98.1" x2="467.4" y2="148.0" style="stroke:var(--d2);stroke-width:1.2;stroke-dasharray:4 3"/>
+      <circle cx="349.5" cy="98.1" r="5" style="fill:var(--d2);stroke:var(--paper);stroke-width:1.5"/>
+      <text x="361.5" y="90.1" class="t-label" style="font-size:11px;fill:var(--accent-2-ink);">当前状态</text>
+      <line x1="467.4" y1="140.0" x2="467.4" y2="156.0" style="stroke:var(--d2);stroke-width:2.5"/>
+      <text x="477.4" y="134.0" class="t-mono" style="font-size:12px;fill:var(--accent-2-ink);">ξ = 0.25 m</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 6.3</span>LIPM 的相平面：横轴是质心相对支撑点的偏移，纵轴是速度，双曲线是脚不动时的轨迹。
+      <span class="fig-note read-for">读者应看出：相平面分成两支流形，只有恰好落在稳定流形上的状态才能不迈步；任意一个状态，从它出发、斜率 −ω 的直线与横轴的交点就是捕获点，也就是必须落到的位置。</span>
+      <span class="fig-src">来源：作者绘制，ω = 3.50 rad/s，轨迹由 <span class="formula-inline">v² − ω²(c − p)² = 常数</span> 解析画出。</span>
+    </figcaption>
+  </figure>
+
+  <p>关键性质：如果 p = ξ，那么 <span class="qdot">ξ</span> = 0，发散停止，质心渐近收敛到 ξ。所以 ξ 就是「脚踩这里就能停住」的位置，也就是捕获点（capture point）。</p>
+
+  <p>数值。被推一下，速度突变 Δv，捕获点前移 Δv/ω。Δv = 0.2 m/s 时前移 5.7 cm，还在脚掌 ±0.12 m 的范围内，踝关节就能吸收，不用迈步。Δv = 0.5 m/s 时前移 14 cm，超过脚掌，必须迈一步。40 N·s 的冲量（一个 4 kg 的球以 10 m/s 撞上来）给 60 kg 的机器人 0.67 m/s，前移 19 cm。所以「被推一下能站住」靠的不是腿更有力，而是把落点挪到 ξ。</p>
+
+  <p>落脚点策略可以写成一行：<span class="formula-inline">p<sub>next</sub> = ξ − b</span>。为什么不直接落在 ξ 上？因为落在 ξ 上，ξ 相对新脚变成 0，机器人停住，下一步就不走了。要维持速度，脚要落在 ξ 后面一点点，这个偏置由期望步长 S<sub>d</sub> 决定：<span class="formula-inline">b = S<sub>d</sub> / (e<sup>ωT</sup> − 1)</span>。分母是推出来的：落点退后 b，一步之后 DCM 相对新脚的偏差就被放大成 e<sup>ωT</sup>·b；稳态下这一步要前进 S<sub>d</sub>，于是 e<sup>ωT</sup>b − S<sub>d</sub> = b，整理即 b(e<sup>ωT</sup> − 1) = S<sub>d</sub>。ω = 3.5、单步周期 T = 0.625 s（1.6 步/秒）、S<sub>d</sub> = 0.35 m 时 b = 0.044 m，落脚点要在捕获点后方 4.4 cm。</p>
+
+  <p>这个数小得刺眼，也说明捕获点落脚为什么难：落点差 1 cm，一步之后 DCM 就多差 7.9 cm（放大 e<sup>ωT</sup> − 1 = 7.9 倍）。步频降到 1.25 步/秒（T = 0.8 s），e<sup>ωT</sup> = 16.4，同样的 1 cm 变成 15 cm。这就是「步频高更稳」的定量解释——不是玄学，是指数增益变平。</p>
+
+  <section class="demo" data-demo="lipm" aria-labelledby="demo61-title">
+    <div class="demo-bar">
+      <span class="demo-live"><i aria-hidden="true"></i>Live</span>
+      <h4 class="demo-title" id="demo61-title">LIPM 侧视仿真：推一下，看它迈几步</h4>
+      <span class="demo-tag">Demo 6.1</span>
+    </div>
+    <div class="demo-stage">
+      <canvas id="demo61-canvas" width="880" height="300" role="img" aria-label="线性倒立摆侧视仿真：地面、支撑脚、质心、零矩点与捕获点随步态实时更新，底部为最近四秒的质心偏移与捕获点偏差时序"></canvas>
+    </div>
+    <div class="demo-controls">
+      <label for="demo61-freq">步频</label>
+      <input id="demo61-freq" type="range" min="0.5" max="2.5" step="0.05" value="1.6">
+      <output class="demo-out" id="demo61-freq-out" for="demo61-freq">1.60 步/秒</output>
+      <label for="demo61-step">步长</label>
+      <input id="demo61-step" type="range" min="0.10" max="0.55" step="0.01" value="0.35">
+      <output class="demo-out" id="demo61-step-out" for="demo61-step">0.35 m</output>
+      <label for="demo61-zc">质心高度</label>
+      <input id="demo61-zc" type="range" min="0.60" max="1.00" step="0.01" value="0.80">
+      <output class="demo-out" id="demo61-zc-out" for="demo61-zc">0.80 m</output>
+      <button type="button" id="demo61-push">推一下 +0.8 m/s</button>
+      <button type="button" id="demo61-shove">重推 +2.2 m/s</button>
+      <button type="button" id="demo61-reset">重置</button>
+      <button type="button" id="demo61-single" hidden>单步 50 ms</button>
+    </div>
+    <dl class="demo-readout">
+      <div><dt>质心速度（瞬时）</dt><dd><span data-readout="speed">0.77</span><small>m/s</small></dd></div>
+      <div><dt>上一步步长</dt><dd><span data-readout="step">0.35</span><small>m</small></dd></div>
+      <div><dt>捕获点偏差</dt><dd><span data-readout="dcm">4.4</span><small>cm</small></dd></div>
+      <div><dt>需求摩擦系数</dt><dd><span data-readout="mu">0.22</span><small>—</small></dd></div>
+    </dl>
+    <p class="demo-note"><strong>这是 LIPM 教学模型，不是真实机器人动力学。</strong>腿无质量、质心等高、落脚瞬时完成，没有关节、摩擦锥与柔性；它演示的只有 <span class="formula-inline">ξ = c + <span class="qdot">c</span>/ω</span> 这条几何关系怎么决定落点。读数里的「质心速度」是瞬时值，一步之内本来就有起伏；它的平均值才是步长 × 步频，默认参数下 0.35 × 1.6 = 0.56 m/s。节拍之外，仿真会在「按当前节拍到点就够不着捕获点」时提前换脚（反射步）——真实机器人做推恢复靠的正是这个，固定节拍做不到。</p>
+  </section>
+
+  <h2>落脚点规划：Raibert 启发式与三条硬约束</h2>
+  <p>这一节解决什么问题：从「这一步落在哪」扩展到「一串落脚点怎么排」。</p>
+
+  <p>Raibert 在 1986 年给出的启发式到今天还在用：</p>
+
+  <div class="formula-block">
+    <span class="formula">x<sub>f</sub> = <span class="qdot">c</span>·T/2 + k(<span class="qdot">c</span> − <span class="qdot">c</span><sub>d</sub>)</span>
+    <span class="formula-no">6.5</span>
+  </div>
+
+  <p>第一项是中性点：以当前速度，T/2 之后质心会走到哪。第二项补偿速度误差，k 的量纲是秒，实机常用 0.03–0.1 s。代入一组数：T = 0.5 s、<span class="qdot">c</span> = 1.0 m/s、<span class="qdot">c</span><sub>d</sub> = 1.2 m/s、k = 0.05 s，得 x<sub>f</sub> = 0.25 + 0.05×(−0.2) = 0.24 m。速度掉到 0.8 m/s 时 x<sub>f</sub> = 0.20 − 0.02 = 0.18 m，脚自动往前收 6 cm，机器人减速。这就是「刹车」在落脚点层面的实现。</p>
+
+  <p>它与捕获点是同一个思想的两副面孔：<span class="formula-inline"><span class="qdot">c</span>T/2</span> 是 ξ 在 ωT 很小时的泰勒展开首项。前者是工程启发式，后者是解析判据；实机上两者常常混用——用 DCM 算目标，用 Raibert 的增益调手感。</p>
+
+  <p>三条硬约束决定步长能有多大。几何：落脚时髋到脚的距离不超过 0.95 倍腿长；1.3 m 机器人腿长 0.65 m，步长 0.5 m 时髋脚水平距离 0.25 m，腿与竖直夹角 23°，还留得住；步长 0.7 m 时夹角 33°，膝要弯更多，力矩跟着涨。时间：摆动腿要在 T<sub>swing</sub> 内完成抬起、前摆、落地；T = 0.4 s、T<sub>swing</sub> = 0.18 s 时摆腿平均角速度约 2.5 rad/s、峰值 5 rad/s 量级。序列：相邻两步的落点差受髋关节行程限制，双支撑时两脚横向间距超过 0.3 m 就会自碰撞。</p>
+
+  <p>地形进入这个问题的唯一入口是抬脚高度。平地 3–5 cm 够用；上 15 cm 的台阶要抬到 20 cm，并往前多留 5 cm 余量。高程图噪声 1–2 cm，抬脚高度至少取噪声的 3 倍，否则每一步都在赌。</p>
+
+  <h2>凸 MPC：把未来一秒写成一个二次规划</h2>
+  <p>这一节解决什么问题：把「未来 1 秒的平衡」写成一个 3 ms 内能解完的二次规划。</p>
+
+  <p>先把三个字母展开。模型预测控制（model predictive control, MPC）每个控制周期往后预测 1–2 s 的状态，解出一串控制量，只执行第一步，下一个周期拿新状态重新解一次。预测用的是模型（这里是 LIPM），所以「模型」；每一步都往前看一段再决定现在，所以「预测」。滚动执行是它和普通反馈的根本区别：反馈只看当前误差，MPC 看的是「按这个走法，1 s 后会到哪」。</p>
+
+  <p>为什么可以凸：LIPM 是线性系统；ZMP 在支撑多边形内是线性不等式；步长上下限是线性；力矩上限可以用 WBC 的可行域近似成线性。目标二次、约束线性，就是凸二次规划（Quadratic Programming, QP）。凸的好处不是优雅，是解唯一、时间可预测、不会在 1 ms 的预算里偶尔超时。</p>
+
+  <p>决策变量有三组：每个预测节点的状态 (c<sub>k</sub>, <span class="qdot">c</span><sub>k</sub>)、每个节点的 ZMP p<sub>k</sub>、未来 K 步的落脚点 s<sub>j</sub>。一个水平轴 16 个节点就是 32 个状态变量加 16 个控制量；两个轴加偏航，总变量 100–300 个。</p>
+
+  <p>预测时域取 1.0–1.6 s。1.6 s 够用的理由可以算：1.6/0.286 = 5.6 个时间常数，窗外的参考对当前决策的影响按 e<sup>−5.6</sup> = 0.37% 衰减。图 6.4 用 1.6 s 窗与 6 s 窗分别反解同一条 ZMP 参考，质心轨迹最大差 1.04 mm——比 1 cm 的目标小一个量级。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 340" role="img" aria-labelledby="ch06-fig4-title ch06-fig4-desc">
+      <title id="ch06-fig4-title">质心轨迹与 ZMP 参考的预览关系</title>
+      <desc id="ch06-fig4-desc">横轴为时间 0 到 3.6 秒，纵轴为水平位置，单位米。虚线为交替切换的 ZMP 参考，相邻台阶相距 0.35 米；实线为质心轨迹，在每次 ZMP 跳变前约 0.2 秒就开始移动。</desc>
+      <defs>
+        <marker id="ch06-fig4-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d2)"/>
+        </marker>
+        <marker id="ch06-fig4-arrow-d1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d1)"/>
+        </marker>
+      </defs>
+      <line x1="84" y1="226.5" x2="556" y2="226.5" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <text x="76.0" y="230.5" class="t-mono" text-anchor="end" style="font-size:10px;fill:var(--muted-ink);">0.0</text>
+      <line x1="84" y1="187.2" x2="556" y2="187.2" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <text x="76.0" y="191.2" class="t-mono" text-anchor="end" style="font-size:10px;fill:var(--muted-ink);">0.1</text>
+      <line x1="84" y1="148.0" x2="556" y2="148.0" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <text x="76.0" y="152.0" class="t-mono" text-anchor="end" style="font-size:10px;fill:var(--muted-ink);">0.2</text>
+      <line x1="84" y1="108.8" x2="556" y2="108.8" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <text x="76.0" y="112.8" class="t-mono" text-anchor="end" style="font-size:10px;fill:var(--muted-ink);">0.3</text>
+      <line x1="84" y1="69.5" x2="556" y2="69.5" style="stroke:var(--line);stroke-width:.5;stroke-dasharray:2 5"/>
+      <text x="76.0" y="73.5" class="t-mono" text-anchor="end" style="font-size:10px;fill:var(--muted-ink);">0.4</text>
+      <text x="84.0" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">0.0</text>
+      <text x="162.7" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">0.6</text>
+      <text x="241.3" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">1.2</text>
+      <text x="320.0" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">1.8</text>
+      <text x="398.7" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">2.4</text>
+      <text x="477.3" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">3.0</text>
+      <text x="556.0" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">3.6</text>
+      <line x1="84" y1="250.0" x2="556" y2="250.0" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="76.0" y="36.0" class="t-label" style="font-size:12px;fill:var(--muted-ink);">位置 / m</text>
+      <rect x="241.3" y="46" width="209.8" height="204" style="fill:var(--d5);fill-opacity:.10"/>
+      <text x="247.3" y="36.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">1.6 s 预览窗</text>
+      <polyline points="84.0,226.5 84.3,226.5 84.5,226.5 84.8,226.5 85.0,226.5 85.3,226.5 85.6,226.5 85.8,226.5 86.1,226.5 86.4,226.5 86.6,226.5 86.9,226.5 87.1,226.5 87.4,226.5 87.7,226.5 87.9,226.5 88.2,226.5 88.5,226.5 88.7,226.5 89.0,226.5 89.2,226.5 89.5,226.5 89.8,226.5 90.0,226.5 90.3,226.5 90.6,226.5 90.8,226.5 91.1,226.5 91.3,226.5 91.6,226.5 91.9,226.5 92.1,226.5 92.4,226.5 92.7,226.5 92.9,226.5 93.2,226.5 93.4,226.5 93.7,226.5 94.0,226.5 94.2,226.5 94.5,226.5 94.8,226.5 95.0,226.5 95.3,226.5 95.5,226.5 95.8,226.5 96.1,226.5 96.3,226.5 96.6,226.5 96.8,226.5 97.1,226.5 97.4,226.5 97.6,226.5 97.9,226.5 98.2,226.5 98.4,226.5 98.7,226.5 98.9,226.5 99.2,226.5 99.5,226.5 99.7,226.5 100.0,226.5 100.3,226.5 100.5,226.5 100.8,226.5 101.0,226.5 101.3,226.5 101.6,226.5 101.8,226.5 102.1,226.5 102.4,226.5 102.6,226.5 102.9,226.5 103.1,226.5 103.4,226.5 103.7,226.5 103.9,226.5 104.2,226.5 104.5,226.5 104.7,226.5 105.0,226.5 105.2,226.5 105.5,226.5 105.8,226.5 106.0,226.5 106.3,226.5 106.6,226.5 106.8,226.5 107.1,226.5 107.3,226.5 107.6,226.5 107.9,226.5 108.1,226.5 108.4,226.5 108.6,226.5 108.9,226.5 109.2,226.5 109.4,226.5 109.7,226.5 110.0,226.5 110.2,226.5 110.5,226.5 110.7,226.5 111.0,226.5 111.3,226.5 111.5,226.5 111.8,226.5 112.1,226.5 112.3,226.5 112.6,226.5 112.8,226.5 113.1,226.5 113.4,226.5 113.6,226.5 113.9,226.5 114.2,226.5 114.4,226.5 114.7,226.5 114.9,226.5 115.2,226.5 115.5,226.5 115.7,226.5 116.0,226.5 116.3,226.5 116.5,226.5 116.8,226.5 117.0,226.5 117.3,226.5 117.6,226.5 117.8,226.5 118.1,226.5 118.4,226.5 118.6,226.5 118.9,226.5 119.1,226.5 119.4,226.5 119.7,226.5 119.9,226.5 120.2,226.5 120.4,226.5 120.7,226.5 121.0,226.5 121.2,226.5 121.5,226.5 121.8,226.5 122.0,226.5 122.3,226.5 122.5,226.5 122.8,226.5 123.1,226.5 123.3,226.5 123.6,226.5 123.9,226.5 124.1,226.5 124.4,226.5 124.6,226.5 124.9,226.5 125.2,226.5 125.4,226.5 125.7,226.5 126.0,226.5 126.2,226.5 126.5,226.5 126.7,226.5 127.0,226.5 127.3,226.5 127.5,226.5 127.8,226.5 128.1,226.5 128.3,226.5 128.6,226.5 128.8,226.5 129.1,226.5 129.4,226.5 129.6,226.5 129.9,226.5 130.2,226.5 130.4,226.5 130.7,226.5 130.9,226.5 131.2,226.5 131.5,226.5 131.7,226.5 132.0,226.5 132.2,226.5 132.5,226.5 132.8,226.5 133.0,226.5 133.3,226.5 133.6,226.5 133.8,226.5 134.1,226.5 134.3,226.5 134.6,226.5 134.9,226.5 135.1,226.5 135.4,226.5 135.7,226.5 135.9,226.5 136.2,226.5 136.4,226.5 136.7,226.5 137.0,226.5 137.2,226.5 137.5,226.5 137.8,226.5 138.0,226.5 138.3,226.5 138.5,226.5 138.8,226.5 139.1,226.5 139.3,226.5 139.6,226.5 139.9,226.5 140.1,226.5 140.4,226.5 140.6,226.5 140.9,226.5 141.2,226.5 141.4,226.5 141.7,226.5 142.0,226.5 142.2,226.5 142.5,226.5 142.7,226.5 143.0,226.5 143.3,226.5 143.5,226.5 143.8,226.5 144.0,226.5 144.3,226.5 144.6,226.5 144.8,226.5 145.1,226.5 145.4,226.5 145.6,226.5 145.9,226.5 146.1,226.5 146.4,226.5 146.7,226.5 146.9,226.5 147.2,226.5 147.5,226.5 147.7,226.5 148.0,226.5 148.2,226.5 148.5,226.5 148.8,226.5 149.0,226.5 149.3,226.5 149.6,226.5 149.8,226.5 150.1,226.5 150.3,226.5 150.6,226.5 150.9,226.5 151.1,226.5 151.4,226.5 151.7,226.5 151.9,226.5 152.2,226.5 152.4,226.5 152.7,226.5 153.0,226.5 153.2,226.5 153.5,226.5 153.8,226.5 154.0,226.5 154.3,226.5 154.5,226.5 154.8,226.5 155.1,226.5 155.3,226.5 155.6,226.5 155.8,226.5 156.1,226.5 156.4,226.5 156.6,226.5 156.9,226.5 157.2,226.5 157.4,226.5 157.7,226.5 157.9,226.5 158.2,226.5 158.5,226.5 158.7,226.5 159.0,226.5 159.3,226.5 159.5,226.5 159.8,226.5 160.0,226.5 160.3,226.5 160.6,226.5 160.8,226.5 161.1,226.5 161.4,226.5 161.6,226.5 161.9,226.5 162.1,226.5 162.4,226.5 162.7,89.2 162.9,89.2 163.2,89.2 163.5,89.2 163.7,89.2 164.0,89.2 164.2,89.2 164.5,89.2 164.8,89.2 165.0,89.2 165.3,89.2 165.6,89.2 165.8,89.2 166.1,89.2 166.3,89.2 166.6,89.2 166.9,89.2 167.1,89.2 167.4,89.2 167.6,89.2 167.9,89.2 168.2,89.2 168.4,89.2 168.7,89.2 169.0,89.2 169.2,89.2 169.5,89.2 169.7,89.2 170.0,89.2 170.3,89.2 170.5,89.2 170.8,89.2 171.1,89.2 171.3,89.2 171.6,89.2 171.8,89.2 172.1,89.2 172.4,89.2 172.6,89.2 172.9,89.2 173.2,89.2 173.4,89.2 173.7,89.2 173.9,89.2 174.2,89.2 174.5,89.2 174.7,89.2 175.0,89.2 175.3,89.2 175.5,89.2 175.8,89.2 176.0,89.2 176.3,89.2 176.6,89.2 176.8,89.2 177.1,89.2 177.4,89.2 177.6,89.2 177.9,89.2 178.1,89.2 178.4,89.2 178.7,89.2 178.9,89.2 179.2,89.2 179.4,89.2 179.7,89.2 180.0,89.2 180.2,89.2 180.5,89.2 180.8,89.2 181.0,89.2 181.3,89.2 181.5,89.2 181.8,89.2 182.1,89.2 182.3,89.2 182.6,89.2 182.9,89.2 183.1,89.2 183.4,89.2 183.6,89.2 183.9,89.2 184.2,89.2 184.4,89.2 184.7,89.2 185.0,89.2 185.2,89.2 185.5,89.2 185.7,89.2 186.0,89.2 186.3,89.2 186.5,89.2 186.8,89.2 187.1,89.2 187.3,89.2 187.6,89.2 187.8,89.2 188.1,89.2 188.4,89.2 188.6,89.2 188.9,89.2 189.2,89.2 189.4,89.2 189.7,89.2 189.9,89.2 190.2,89.2 190.5,89.2 190.7,89.2 191.0,89.2 191.2,89.2 191.5,89.2 191.8,89.2 192.0,89.2 192.3,89.2 192.6,89.2 192.8,89.2 193.1,89.2 193.3,89.2 193.6,89.2 193.9,89.2 194.1,89.2 194.4,89.2 194.7,89.2 194.9,89.2 195.2,89.2 195.4,89.2 195.7,89.2 196.0,89.2 196.2,89.2 196.5,89.2 196.8,89.2 197.0,89.2 197.3,89.2 197.5,89.2 197.8,89.2 198.1,89.2 198.3,89.2 198.6,89.2 198.9,89.2 199.1,89.2 199.4,89.2 199.6,89.2 199.9,89.2 200.2,89.2 200.4,89.2 200.7,89.2 201.0,89.2 201.2,89.2 201.5,89.2 201.7,89.2 202.0,89.2 202.3,89.2 202.5,89.2 202.8,89.2 203.0,89.2 203.3,89.2 203.6,89.2 203.8,89.2 204.1,89.2 204.4,89.2 204.6,89.2 204.9,89.2 205.1,89.2 205.4,89.2 205.7,89.2 205.9,89.2 206.2,89.2 206.5,89.2 206.7,89.2 207.0,89.2 207.2,89.2 207.5,89.2 207.8,89.2 208.0,89.2 208.3,89.2 208.6,89.2 208.8,89.2 209.1,89.2 209.3,89.2 209.6,89.2 209.9,89.2 210.1,89.2 210.4,89.2 210.7,89.2 210.9,89.2 211.2,89.2 211.4,89.2 211.7,89.2 212.0,89.2 212.2,89.2 212.5,89.2 212.8,89.2 213.0,89.2 213.3,89.2 213.5,89.2 213.8,89.2 214.1,89.2 214.3,89.2 214.6,89.2 214.8,89.2 215.1,89.2 215.4,89.2 215.6,89.2 215.9,89.2 216.2,89.2 216.4,89.2 216.7,89.2 216.9,89.2 217.2,89.2 217.5,89.2 217.7,89.2 218.0,89.2 218.3,89.2 218.5,89.2 218.8,89.2 219.0,89.2 219.3,89.2 219.6,89.2 219.8,89.2 220.1,89.2 220.4,89.2 220.6,89.2 220.9,89.2 221.1,89.2 221.4,89.2 221.7,226.5 221.9,226.5 222.2,226.5 222.5,226.5 222.7,226.5 223.0,226.5 223.2,226.5 223.5,226.5 223.8,226.5 224.0,226.5 224.3,226.5 224.6,226.5 224.8,226.5 225.1,226.5 225.3,226.5 225.6,226.5 225.9,226.5 226.1,226.5 226.4,226.5 226.6,226.5 226.9,226.5 227.2,226.5 227.4,226.5 227.7,226.5 228.0,226.5 228.2,226.5 228.5,226.5 228.7,226.5 229.0,226.5 229.3,226.5 229.5,226.5 229.8,226.5 230.1,226.5 230.3,226.5 230.6,226.5 230.8,226.5 231.1,226.5 231.4,226.5 231.6,226.5 231.9,226.5 232.2,226.5 232.4,226.5 232.7,226.5 232.9,226.5 233.2,226.5 233.5,226.5 233.7,226.5 234.0,226.5 234.3,226.5 234.5,226.5 234.8,226.5 235.0,226.5 235.3,226.5 235.6,226.5 235.8,226.5 236.1,226.5 236.4,226.5 236.6,226.5 236.9,226.5 237.1,226.5 237.4,226.5 237.7,226.5 237.9,226.5 238.2,226.5 238.4,226.5 238.7,226.5 239.0,226.5 239.2,226.5 239.5,226.5 239.8,226.5 240.0,226.5 240.3,226.5 240.5,226.5 240.8,226.5 241.1,226.5 241.3,226.5 241.6,226.5 241.9,226.5 242.1,226.5 242.4,226.5 242.6,226.5 242.9,226.5 243.2,226.5 243.4,226.5 243.7,226.5 244.0,226.5 244.2,226.5 244.5,226.5 244.7,226.5 245.0,226.5 245.3,226.5 245.5,226.5 245.8,226.5 246.1,226.5 246.3,226.5 246.6,226.5 246.8,226.5 247.1,226.5 247.4,226.5 247.6,226.5 247.9,226.5 248.2,226.5 248.4,226.5 248.7,226.5 248.9,226.5 249.2,226.5 249.5,226.5 249.7,226.5 250.0,226.5 250.2,226.5 250.5,226.5 250.8,226.5 251.0,226.5 251.3,226.5 251.6,226.5 251.8,226.5 252.1,226.5 252.3,226.5 252.6,226.5 252.9,226.5 253.1,226.5 253.4,226.5 253.7,226.5 253.9,226.5 254.2,226.5 254.4,226.5 254.7,226.5 255.0,226.5 255.2,226.5 255.5,226.5 255.8,226.5 256.0,226.5 256.3,226.5 256.5,226.5 256.8,226.5 257.1,226.5 257.3,226.5 257.6,226.5 257.9,226.5 258.1,226.5 258.4,226.5 258.6,226.5 258.9,226.5 259.2,226.5 259.4,226.5 259.7,226.5 260.0,226.5 260.2,226.5 260.5,226.5 260.7,226.5 261.0,226.5 261.3,226.5 261.5,226.5 261.8,226.5 262.0,226.5 262.3,226.5 262.6,226.5 262.8,226.5 263.1,226.5 263.4,226.5 263.6,226.5 263.9,226.5 264.1,226.5 264.4,226.5 264.7,226.5 264.9,226.5 265.2,226.5 265.5,226.5 265.7,226.5 266.0,226.5 266.2,226.5 266.5,226.5 266.8,226.5 267.0,226.5 267.3,226.5 267.6,226.5 267.8,226.5 268.1,226.5 268.3,226.5 268.6,226.5 268.9,226.5 269.1,226.5 269.4,226.5 269.7,226.5 269.9,226.5 270.2,226.5 270.4,226.5 270.7,226.5 271.0,226.5 271.2,226.5 271.5,226.5 271.8,226.5 272.0,226.5 272.3,226.5 272.5,226.5 272.8,226.5 273.1,226.5 273.3,226.5 273.6,226.5 273.8,226.5 274.1,226.5 274.4,226.5 274.6,226.5 274.9,226.5 275.2,226.5 275.4,226.5 275.7,226.5 275.9,226.5 276.2,226.5 276.5,226.5 276.7,226.5 277.0,226.5 277.3,226.5 277.5,226.5 277.8,226.5 278.0,226.5 278.3,226.5 278.6,226.5 278.8,226.5 279.1,226.5 279.4,226.5 279.6,226.5 279.9,226.5 280.1,226.5 280.4,226.5 280.7,89.2 280.9,89.2 281.2,89.2 281.5,89.2 281.7,89.2 282.0,89.2 282.2,89.2 282.5,89.2 282.8,89.2 283.0,89.2 283.3,89.2 283.6,89.2 283.8,89.2 284.1,89.2 284.3,89.2 284.6,89.2 284.9,89.2 285.1,89.2 285.4,89.2 285.6,89.2 285.9,89.2 286.2,89.2 286.4,89.2 286.7,89.2 287.0,89.2 287.2,89.2 287.5,89.2 287.7,89.2 288.0,89.2 288.3,89.2 288.5,89.2 288.8,89.2 289.1,89.2 289.3,89.2 289.6,89.2 289.8,89.2 290.1,89.2 290.4,89.2 290.6,89.2 290.9,89.2 291.2,89.2 291.4,89.2 291.7,89.2 291.9,89.2 292.2,89.2 292.5,89.2 292.7,89.2 293.0,89.2 293.3,89.2 293.5,89.2 293.8,89.2 294.0,89.2 294.3,89.2 294.6,89.2 294.8,89.2 295.1,89.2 295.4,89.2 295.6,89.2 295.9,89.2 296.1,89.2 296.4,89.2 296.7,89.2 296.9,89.2 297.2,89.2 297.4,89.2 297.7,89.2 298.0,89.2 298.2,89.2 298.5,89.2 298.8,89.2 299.0,89.2 299.3,89.2 299.5,89.2 299.8,89.2 300.1,89.2 300.3,89.2 300.6,89.2 300.9,89.2 301.1,89.2 301.4,89.2 301.6,89.2 301.9,89.2 302.2,89.2 302.4,89.2 302.7,89.2 303.0,89.2 303.2,89.2 303.5,89.2 303.7,89.2 304.0,89.2 304.3,89.2 304.5,89.2 304.8,89.2 305.1,89.2 305.3,89.2 305.6,89.2 305.8,89.2 306.1,89.2 306.4,89.2 306.6,89.2 306.9,89.2 307.2,89.2 307.4,89.2 307.7,89.2 307.9,89.2 308.2,89.2 308.5,89.2 308.7,89.2 309.0,89.2 309.2,89.2 309.5,89.2 309.8,89.2 310.0,89.2 310.3,89.2 310.6,89.2 310.8,89.2 311.1,89.2 311.3,89.2 311.6,89.2 311.9,89.2 312.1,89.2 312.4,89.2 312.7,89.2 312.9,89.2 313.2,89.2 313.4,89.2 313.7,89.2 314.0,89.2 314.2,89.2 314.5,89.2 314.8,89.2 315.0,89.2 315.3,89.2 315.5,89.2 315.8,89.2 316.1,89.2 316.3,89.2 316.6,89.2 316.9,89.2 317.1,89.2 317.4,89.2 317.6,89.2 317.9,89.2 318.2,89.2 318.4,89.2 318.7,89.2 319.0,89.2 319.2,89.2 319.5,89.2 319.7,89.2 320.0,89.2 320.3,89.2 320.5,89.2 320.8,89.2 321.0,89.2 321.3,89.2 321.6,89.2 321.8,89.2 322.1,89.2 322.4,89.2 322.6,89.2 322.9,89.2 323.1,89.2 323.4,89.2 323.7,89.2 323.9,89.2 324.2,89.2 324.5,89.2 324.7,89.2 325.0,89.2 325.2,89.2 325.5,89.2 325.8,89.2 326.0,89.2 326.3,89.2 326.6,89.2 326.8,89.2 327.1,89.2 327.3,89.2 327.6,89.2 327.9,89.2 328.1,89.2 328.4,89.2 328.7,89.2 328.9,89.2 329.2,89.2 329.4,89.2 329.7,89.2 330.0,89.2 330.2,89.2 330.5,89.2 330.8,89.2 331.0,89.2 331.3,89.2 331.5,89.2 331.8,89.2 332.1,89.2 332.3,89.2 332.6,89.2 332.8,89.2 333.1,89.2 333.4,89.2 333.6,89.2 333.9,89.2 334.2,89.2 334.4,89.2 334.7,89.2 334.9,89.2 335.2,89.2 335.5,89.2 335.7,89.2 336.0,89.2 336.3,89.2 336.5,89.2 336.8,89.2 337.0,89.2 337.3,89.2 337.6,89.2 337.8,89.2 338.1,89.2 338.4,89.2 338.6,89.2 338.9,89.2 339.1,89.2 339.4,89.2 339.7,226.5 339.9,226.5 340.2,226.5 340.5,226.5 340.7,226.5 341.0,226.5 341.2,226.5 341.5,226.5 341.8,226.5 342.0,226.5 342.3,226.5 342.6,226.5 342.8,226.5 343.1,226.5 343.3,226.5 343.6,226.5 343.9,226.5 344.1,226.5 344.4,226.5 344.6,226.5 344.9,226.5 345.2,226.5 345.4,226.5 345.7,226.5 346.0,226.5 346.2,226.5 346.5,226.5 346.7,226.5 347.0,226.5 347.3,226.5 347.5,226.5 347.8,226.5 348.1,226.5 348.3,226.5 348.6,226.5 348.8,226.5 349.1,226.5 349.4,226.5 349.6,226.5 349.9,226.5 350.2,226.5 350.4,226.5 350.7,226.5 350.9,226.5 351.2,226.5 351.5,226.5 351.7,226.5 352.0,226.5 352.3,226.5 352.5,226.5 352.8,226.5 353.0,226.5 353.3,226.5 353.6,226.5 353.8,226.5 354.1,226.5 354.4,226.5 354.6,226.5 354.9,226.5 355.1,226.5 355.4,226.5 355.7,226.5 355.9,226.5 356.2,226.5 356.4,226.5 356.7,226.5 357.0,226.5 357.2,226.5 357.5,226.5 357.8,226.5 358.0,226.5 358.3,226.5 358.5,226.5 358.8,226.5 359.1,226.5 359.3,226.5 359.6,226.5 359.9,226.5 360.1,226.5 360.4,226.5 360.6,226.5 360.9,226.5 361.2,226.5 361.4,226.5 361.7,226.5 362.0,226.5 362.2,226.5 362.5,226.5 362.7,226.5 363.0,226.5 363.3,226.5 363.5,226.5 363.8,226.5 364.1,226.5 364.3,226.5 364.6,226.5 364.8,226.5 365.1,226.5 365.4,226.5 365.6,226.5 365.9,226.5 366.2,226.5 366.4,226.5 366.7,226.5 366.9,226.5 367.2,226.5 367.5,226.5 367.7,226.5 368.0,226.5 368.2,226.5 368.5,226.5 368.8,226.5 369.0,226.5 369.3,226.5 369.6,226.5 369.8,226.5 370.1,226.5 370.3,226.5 370.6,226.5 370.9,226.5 371.1,226.5 371.4,226.5 371.7,226.5 371.9,226.5 372.2,226.5 372.4,226.5 372.7,226.5 373.0,226.5 373.2,226.5 373.5,226.5 373.8,226.5 374.0,226.5 374.3,226.5 374.5,226.5 374.8,226.5 375.1,226.5 375.3,226.5 375.6,226.5 375.9,226.5 376.1,226.5 376.4,226.5 376.6,226.5 376.9,226.5 377.2,226.5 377.4,226.5 377.7,226.5 378.0,226.5 378.2,226.5 378.5,226.5 378.7,226.5 379.0,226.5 379.3,226.5 379.5,226.5 379.8,226.5 380.0,226.5 380.3,226.5 380.6,226.5 380.8,226.5 381.1,226.5 381.4,226.5 381.6,226.5 381.9,226.5 382.1,226.5 382.4,226.5 382.7,226.5 382.9,226.5 383.2,226.5 383.5,226.5 383.7,226.5 384.0,226.5 384.2,226.5 384.5,226.5 384.8,226.5 385.0,226.5 385.3,226.5 385.6,226.5 385.8,226.5 386.1,226.5 386.3,226.5 386.6,226.5 386.9,226.5 387.1,226.5 387.4,226.5 387.7,226.5 387.9,226.5 388.2,226.5 388.4,226.5 388.7,226.5 389.0,226.5 389.2,226.5 389.5,226.5 389.8,226.5 390.0,226.5 390.3,226.5 390.5,226.5 390.8,226.5 391.1,226.5 391.3,226.5 391.6,226.5 391.8,226.5 392.1,226.5 392.4,226.5 392.6,226.5 392.9,226.5 393.2,226.5 393.4,226.5 393.7,226.5 393.9,226.5 394.2,226.5 394.5,226.5 394.7,226.5 395.0,226.5 395.3,226.5 395.5,226.5 395.8,226.5 396.0,226.5 396.3,226.5 396.6,226.5 396.8,226.5 397.1,226.5 397.4,226.5 397.6,226.5 397.9,226.5 398.1,226.5 398.4,226.5 398.7,226.5 398.9,89.2 399.2,89.2 399.5,89.2 399.7,89.2 400.0,89.2 400.2,89.2 400.5,89.2 400.8,89.2 401.0,89.2 401.3,89.2 401.6,89.2 401.8,89.2 402.1,89.2 402.3,89.2 402.6,89.2 402.9,89.2 403.1,89.2 403.4,89.2 403.6,89.2 403.9,89.2 404.2,89.2 404.4,89.2 404.7,89.2 405.0,89.2 405.2,89.2 405.5,89.2 405.7,89.2 406.0,89.2 406.3,89.2 406.5,89.2 406.8,89.2 407.1,89.2 407.3,89.2 407.6,89.2 407.8,89.2 408.1,89.2 408.4,89.2 408.6,89.2 408.9,89.2 409.2,89.2 409.4,89.2 409.7,89.2 409.9,89.2 410.2,89.2 410.5,89.2 410.7,89.2 411.0,89.2 411.3,89.2 411.5,89.2 411.8,89.2 412.0,89.2 412.3,89.2 412.6,89.2 412.8,89.2 413.1,89.2 413.4,89.2 413.6,89.2 413.9,89.2 414.1,89.2 414.4,89.2 414.7,89.2 414.9,89.2 415.2,89.2 415.4,89.2 415.7,89.2 416.0,89.2 416.2,89.2 416.5,89.2 416.8,89.2 417.0,89.2 417.3,89.2 417.5,89.2 417.8,89.2 418.1,89.2 418.3,89.2 418.6,89.2 418.9,89.2 419.1,89.2 419.4,89.2 419.6,89.2 419.9,89.2 420.2,89.2 420.4,89.2 420.7,89.2 421.0,89.2 421.2,89.2 421.5,89.2 421.7,89.2 422.0,89.2 422.3,89.2 422.5,89.2 422.8,89.2 423.1,89.2 423.3,89.2 423.6,89.2 423.8,89.2 424.1,89.2 424.4,89.2 424.6,89.2 424.9,89.2 425.2,89.2 425.4,89.2 425.7,89.2 425.9,89.2 426.2,89.2 426.5,89.2 426.7,89.2 427.0,89.2 427.2,89.2 427.5,89.2 427.8,89.2 428.0,89.2 428.3,89.2 428.6,89.2 428.8,89.2 429.1,89.2 429.3,89.2 429.6,89.2 429.9,89.2 430.1,89.2 430.4,89.2 430.7,89.2 430.9,89.2 431.2,89.2 431.4,89.2 431.7,89.2 432.0,89.2 432.2,89.2 432.5,89.2 432.8,89.2 433.0,89.2 433.3,89.2 433.5,89.2 433.8,89.2 434.1,89.2 434.3,89.2 434.6,89.2 434.9,89.2 435.1,89.2 435.4,89.2 435.6,89.2 435.9,89.2 436.2,89.2 436.4,89.2 436.7,89.2 437.0,89.2 437.2,89.2 437.5,89.2 437.7,89.2 438.0,89.2 438.3,89.2 438.5,89.2 438.8,89.2 439.0,89.2 439.3,89.2 439.6,89.2 439.8,89.2 440.1,89.2 440.4,89.2 440.6,89.2 440.9,89.2 441.1,89.2 441.4,89.2 441.7,89.2 441.9,89.2 442.2,89.2 442.5,89.2 442.7,89.2 443.0,89.2 443.2,89.2 443.5,89.2 443.8,89.2 444.0,89.2 444.3,89.2 444.6,89.2 444.8,89.2 445.1,89.2 445.3,89.2 445.6,89.2 445.9,89.2 446.1,89.2 446.4,89.2 446.7,89.2 446.9,89.2 447.2,89.2 447.4,89.2 447.7,89.2 448.0,89.2 448.2,89.2 448.5,89.2 448.8,89.2 449.0,89.2 449.3,89.2 449.5,89.2 449.8,89.2 450.1,89.2 450.3,89.2 450.6,89.2 450.8,89.2 451.1,89.2 451.4,89.2 451.6,89.2 451.9,89.2 452.2,89.2 452.4,89.2 452.7,89.2 452.9,89.2 453.2,89.2 453.5,89.2 453.7,89.2 454.0,89.2 454.3,89.2 454.5,89.2 454.8,89.2 455.0,89.2 455.3,89.2 455.6,89.2 455.8,89.2 456.1,89.2 456.4,89.2 456.6,89.2 456.9,89.2 457.1,89.2 457.4,89.2 457.7,89.2 457.9,226.5 458.2,226.5 458.5,226.5 458.7,226.5 459.0,226.5 459.2,226.5 459.5,226.5 459.8,226.5 460.0,226.5 460.3,226.5 460.6,226.5 460.8,226.5 461.1,226.5 461.3,226.5 461.6,226.5 461.9,226.5 462.1,226.5 462.4,226.5 462.6,226.5 462.9,226.5 463.2,226.5 463.4,226.5 463.7,226.5 464.0,226.5 464.2,226.5 464.5,226.5 464.7,226.5 465.0,226.5 465.3,226.5 465.5,226.5 465.8,226.5 466.1,226.5 466.3,226.5 466.6,226.5 466.8,226.5 467.1,226.5 467.4,226.5 467.6,226.5 467.9,226.5 468.2,226.5 468.4,226.5 468.7,226.5 468.9,226.5 469.2,226.5 469.5,226.5 469.7,226.5 470.0,226.5 470.3,226.5 470.5,226.5 470.8,226.5 471.0,226.5 471.3,226.5 471.6,226.5 471.8,226.5 472.1,226.5 472.4,226.5 472.6,226.5 472.9,226.5 473.1,226.5 473.4,226.5 473.7,226.5 473.9,226.5 474.2,226.5 474.4,226.5 474.7,226.5 475.0,226.5 475.2,226.5 475.5,226.5 475.8,226.5 476.0,226.5 476.3,226.5 476.5,226.5 476.8,226.5 477.1,226.5 477.3,226.5 477.6,226.5 477.9,226.5 478.1,226.5 478.4,226.5 478.6,226.5 478.9,226.5 479.2,226.5 479.4,226.5 479.7,226.5 480.0,226.5 480.2,226.5 480.5,226.5 480.7,226.5 481.0,226.5 481.3,226.5 481.5,226.5 481.8,226.5 482.1,226.5 482.3,226.5 482.6,226.5 482.8,226.5 483.1,226.5 483.4,226.5 483.6,226.5 483.9,226.5 484.2,226.5 484.4,226.5 484.7,226.5 484.9,226.5 485.2,226.5 485.5,226.5 485.7,226.5 486.0,226.5 486.2,226.5 486.5,226.5 486.8,226.5 487.0,226.5 487.3,226.5 487.6,226.5 487.8,226.5 488.1,226.5 488.3,226.5 488.6,226.5 488.9,226.5 489.1,226.5 489.4,226.5 489.7,226.5 489.9,226.5 490.2,226.5 490.4,226.5 490.7,226.5 491.0,226.5 491.2,226.5 491.5,226.5 491.8,226.5 492.0,226.5 492.3,226.5 492.5,226.5 492.8,226.5 493.1,226.5 493.3,226.5 493.6,226.5 493.9,226.5 494.1,226.5 494.4,226.5 494.6,226.5 494.9,226.5 495.2,226.5 495.4,226.5 495.7,226.5 496.0,226.5 496.2,226.5 496.5,226.5 496.7,226.5 497.0,226.5 497.3,226.5 497.5,226.5 497.8,226.5 498.0,226.5 498.3,226.5 498.6,226.5 498.8,226.5 499.1,226.5 499.4,226.5 499.6,226.5 499.9,226.5 500.1,226.5 500.4,226.5 500.7,226.5 500.9,226.5 501.2,226.5 501.5,226.5 501.7,226.5 502.0,226.5 502.2,226.5 502.5,226.5 502.8,226.5 503.0,226.5 503.3,226.5 503.6,226.5 503.8,226.5 504.1,226.5 504.3,226.5 504.6,226.5 504.9,226.5 505.1,226.5 505.4,226.5 505.7,226.5 505.9,226.5 506.2,226.5 506.4,226.5 506.7,226.5 507.0,226.5 507.2,226.5 507.5,226.5 507.8,226.5 508.0,226.5 508.3,226.5 508.5,226.5 508.8,226.5 509.1,226.5 509.3,226.5 509.6,226.5 509.8,226.5 510.1,226.5 510.4,226.5 510.6,226.5 510.9,226.5 511.2,226.5 511.4,226.5 511.7,226.5 511.9,226.5 512.2,226.5 512.5,226.5 512.7,226.5 513.0,226.5 513.3,226.5 513.5,226.5 513.8,226.5 514.0,226.5 514.3,226.5 514.6,226.5 514.8,226.5 515.1,226.5 515.4,226.5 515.6,226.5 515.9,226.5 516.1,226.5 516.4,226.5 516.7,226.5 516.9,89.2 517.2,89.2 517.5,89.2 517.7,89.2 518.0,89.2 518.2,89.2 518.5,89.2 518.8,89.2 519.0,89.2 519.3,89.2 519.6,89.2 519.8,89.2 520.1,89.2 520.3,89.2 520.6,89.2 520.9,89.2 521.1,89.2 521.4,89.2 521.6,89.2 521.9,89.2 522.2,89.2 522.4,89.2 522.7,89.2 523.0,89.2 523.2,89.2 523.5,89.2 523.7,89.2 524.0,89.2 524.3,89.2 524.5,89.2 524.8,89.2 525.1,89.2 525.3,89.2 525.6,89.2 525.8,89.2 526.1,89.2 526.4,89.2 526.6,89.2 526.9,89.2 527.2,89.2 527.4,89.2 527.7,89.2 527.9,89.2 528.2,89.2 528.5,89.2 528.7,89.2 529.0,89.2 529.3,89.2 529.5,89.2 529.8,89.2 530.0,89.2 530.3,89.2 530.6,89.2 530.8,89.2 531.1,89.2 531.4,89.2 531.6,89.2 531.9,89.2 532.1,89.2 532.4,89.2 532.7,89.2 532.9,89.2 533.2,89.2 533.4,89.2 533.7,89.2 534.0,89.2 534.2,89.2 534.5,89.2 534.8,89.2 535.0,89.2 535.3,89.2 535.5,89.2 535.8,89.2 536.1,89.2 536.3,89.2 536.6,89.2 536.9,89.2 537.1,89.2 537.4,89.2 537.6,89.2 537.9,89.2 538.2,89.2 538.4,89.2 538.7,89.2 539.0,89.2 539.2,89.2 539.5,89.2 539.7,89.2 540.0,89.2 540.3,89.2 540.5,89.2 540.8,89.2 541.1,89.2 541.3,89.2 541.6,89.2 541.8,89.2 542.1,89.2 542.4,89.2 542.6,89.2 542.9,89.2 543.2,89.2 543.4,89.2 543.7,89.2 543.9,89.2 544.2,89.2 544.5,89.2 544.7,89.2 545.0,89.2 545.2,89.2 545.5,89.2 545.8,89.2 546.0,89.2 546.3,89.2 546.6,89.2 546.8,89.2 547.1,89.2 547.3,89.2 547.6,89.2 547.9,89.2 548.1,89.2 548.4,89.2 548.7,89.2 548.9,89.2 549.2,89.2 549.4,89.2 549.7,89.2 550.0,89.2 550.2,89.2 550.5,89.2 550.8,89.2 551.0,89.2 551.3,89.2 551.5,89.2 551.8,89.2 552.1,89.2 552.3,89.2 552.6,89.2 552.9,89.2 553.1,89.2 553.4,89.2 553.6,89.2 553.9,89.2 554.2,89.2 554.4,89.2 554.7,89.2 555.0,89.2 555.2,89.2 555.5,89.2 555.7,89.2 556.0,89.2 556.0,89.2" style="fill:none;stroke:var(--d4);stroke-width:1.4;stroke-dasharray:5 3"/>
+      <polyline points="84.0,219.7 86.1,219.3 88.2,218.8 90.3,218.4 92.4,217.9 94.5,217.5 96.6,216.9 98.7,216.4 100.8,215.7 102.9,215.0 105.0,214.5 107.1,213.8 109.2,212.9 111.3,212.1 113.4,211.4 115.5,210.5 117.6,209.4 119.7,208.5 121.8,207.4 123.9,206.5 126.0,205.1 128.1,203.9 130.2,202.8 132.2,201.4 134.3,199.9 136.4,198.2 138.5,196.5 140.6,195.1 142.7,193.3 144.8,191.1 146.9,189.3 149.0,187.2 151.1,184.9 153.2,182.2 155.3,179.6 157.4,176.9 159.5,174.1 161.6,171.5 163.7,168.4 165.8,165.5 167.9,162.7 170.0,160.3 172.1,157.6 174.2,155.6 176.3,154.2 178.4,152.5 180.5,151.1 182.6,149.9 184.7,148.9 186.8,147.8 188.9,147.1 191.0,146.6 193.1,146.3 195.2,146.4 197.3,146.4 199.4,146.7 201.5,146.9 203.6,147.5 205.7,148.3 207.8,149.2 209.9,150.5 212.0,151.8 214.1,153.4 216.2,155.1 218.3,156.9 220.4,159.1 222.5,161.4 224.6,163.6 226.6,165.6 228.7,167.4 230.8,169.0 232.9,170.5 235.0,171.7 237.1,172.6 239.2,173.5 241.3,174.5 243.4,175.1 245.5,175.5 247.6,175.8 249.7,175.9 251.8,175.9 253.9,175.7 256.0,175.3 258.1,174.8 260.2,174.1 262.3,173.2 264.4,172.2 266.5,171.0 268.6,169.6 270.7,168.0 272.8,166.3 274.9,164.4 277.0,162.4 279.1,160.1 281.2,157.6 283.3,155.3 285.4,153.1 287.5,151.1 289.6,149.3 291.7,147.8 293.8,146.4 295.9,145.1 298.0,144.1 300.1,143.2 302.2,142.5 304.3,141.9 306.4,141.6 308.5,141.4 310.6,141.3 312.7,141.4 314.8,141.7 316.9,142.1 319.0,142.7 321.0,143.5 323.1,144.4 325.2,145.6 327.3,146.8 329.4,148.3 331.5,150.0 333.6,151.8 335.7,153.8 337.8,156.1 339.9,158.5 342.0,160.9 344.1,163.0 346.2,165.0 348.3,166.8 350.4,168.4 352.5,169.8 354.6,171.0 356.7,172.0 358.8,172.9 360.9,173.6 363.0,174.2 365.1,174.5 367.2,174.7 369.3,174.8 371.4,174.7 373.5,174.5 375.6,174.0 377.7,173.5 379.8,172.7 381.9,171.8 384.0,170.7 386.1,169.4 388.2,167.8 390.3,166.2 392.4,164.3 394.5,162.4 396.6,160.3 398.7,157.9 400.8,155.5 402.9,153.3 405.0,151.3 407.1,149.5 409.2,147.9 411.3,146.5 413.4,145.3 415.4,144.2 417.5,143.3 419.6,142.6 421.7,142.0 423.8,141.6 425.9,141.4 428.0,141.3 430.1,141.4 432.2,141.6 434.3,142.0 436.4,142.6 438.5,143.3 440.6,144.2 442.7,145.3 444.8,146.5 446.9,147.9 449.0,149.5 451.1,151.3 453.2,152.9 455.3,155.0 457.4,157.4 459.5,160.3 461.6,162.5 463.7,164.5 465.8,166.4 467.9,168.0 470.0,169.4 472.1,170.7 474.2,171.8 476.3,172.7 478.4,173.5 480.5,174.0 482.6,174.5 484.7,174.7 486.8,174.8 488.9,174.7 491.0,174.5 493.1,174.2 495.2,173.6 497.3,172.9 499.4,172.0 501.5,171.0 503.6,169.8 505.7,168.4 507.8,166.8 509.8,165.0 511.9,163.1 514.0,160.9 516.1,158.5 518.2,156.1 520.3,153.8 522.4,151.7 524.5,149.9 526.6,148.2 528.7,146.8 530.8,145.5 532.9,144.4 535.0,143.5 537.1,142.7 539.2,142.1 541.3,141.7 543.4,141.4 545.5,141.3 547.6,141.4 549.7,141.6 551.8,141.9 553.9,142.4 556.0,143.1" style="fill:none;stroke:var(--d1);stroke-width:2"/>
+      <line x1="221.7" y1="226.5" x2="221.7" y2="89.2" style="stroke:var(--d2);stroke-width:1;stroke-dasharray:3 3"/>
+      <circle cx="221.7" cy="157.8" r="4.5" style="fill:var(--d2);stroke:var(--paper);stroke-width:1.5"/>
+      <text x="556.0" y="36.0" class="t-label" text-anchor="end" style="font-size:11px;fill:var(--accent-2-ink);">橙点：ZMP 跳变时质心已走完一半行程</text>
+      <line x1="84" y1="286" x2="108" y2="286" style="stroke:var(--d1);stroke-width:2"/>
+      <text x="114.0" y="290.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">质心 x</text>
+      <line x1="190" y1="286" x2="214" y2="286" style="stroke:var(--d4);stroke-width:1.4;stroke-dasharray:5 3"/>
+      <text x="220.0" y="290.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">ZMP 参考 p</text>
+      <text x="556.0" y="290.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">时间 / s</text>
+      <text x="84.0" y="310.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">台阶高 0.35 m、宽 0.45 s（相邻落点间距 0.35 m，单步周期 0.45 s）</text>
+      <text x="84.0" y="326.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">步频 2.2 步/秒、平均速度 0.78 m/s；ω = 3.50 rad/s。</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 6.4</span>ZMP 参考与质心的时序：台阶状虚线是交替切换的 ZMP 参考，实线是用 1.6 s 双侧窗反解出的质心。
+      <span class="fig-note read-for">读者应看出：质心在 ZMP 跳变之前就已走完一半行程——这就是「预览」的全部含义，也是 ZMP 跟踪必须提前 0.2–0.3 s 的原因。</span>
+      <span class="fig-src">来源：作者计算，按 <span class="formula-inline">c(t) = (ω/2)∫ e<sup>−ω|t−τ|</sup> p(τ)dτ</span> 数值积分；1.6 s 窗与 6 s 窗之差 1.04 mm。</span>
+    </figcaption>
+  </figure>
+
+  <p>离散化用零阶保持。A、B 不是拟合出来的：把 6.2 式的 t 换成 dt、把 p 当成一步内不变的常数，得到 c(dt) = p + (c − p)cosh(ωdt) + (<span class="qdot">c</span>/ω)sinh(ωdt) 与 <span class="qdot">c</span>(dt) = ω(c − p)sinh(ωdt) + <span class="qdot">c</span>cosh(ωdt)。按状态 [c, <span class="qdot">c</span>] 的系数逐项抄成矩阵：A 的四个元素是 cosh、sinh/ω、ω sinh、cosh，B 的两个元素是 1 − cosh 与 −ω sinh。ωdt = 0.35 时 cosh = 1.0619、sinh/ω = 0.1021——正是下面代码里的 1.062 与 0.102。代入 dt = 0.1 s、ω = 3.5：A = [[1.062, 0.102], [1.250, 1.062]]，B = [[−0.062], [−1.250]]。注意 B 的第一行只有 −0.062：ZMP 挪 1 cm，0.1 s 内只把位置推动 0.6 mm，却把速度推动 1.25 cm/s。ZMP 是加速度级输入，不是位置级——这解释了为什么 MPC 的状态里速度比位置更要紧。</p>
+
+  <p>写进 QP 的约束有四类。支撑多边形：p<sub>k</sub> ∈ P(phase_k)，单支撑时是脚下矩形，双支撑时是两脚凸包，每条边一条线性不等式。步长：0.10 ≤ |s<sub>j+1</sub> − s<sub>j</sub>| ≤ 0.50 m。摩擦：|p<sub>k</sub> − c<sub>k</sub>| ≤ μ z<sub>c</sub>，μ = 0.6、z<sub>c</sub> = 0.8 时是 0.48 m——这条看着不像摩擦，推一下就是：水平加速度 a = ω²(c − p)，需要的摩擦系数是 |a|/g = |c − p|/z<sub>c</sub>，要求它不超过 μ，移项即得 |p<sub>k</sub> − c<sub>k</sub>| ≤ μ z<sub>c</sub>。力矩：τ<sub>min</sub> ≤ τ ≤ τ<sub>max</sub>，用 WBC 解出的可行域做线性化近似。</p>
+
+  <p>权重 Q 罚状态误差、R 罚 ZMP 偏离参考。Q 大，解更贴参考，ZMP 抖；R 大，ZMP 平滑，跟踪变慢。典型取 Q = diag(1, 0.1)、R = 0.01（量级），闭环时间常数落在 0.2–0.3 s。</p>
+
+  <p>求解器分两类：OSQP 是 ADMM 型，支持热启动与嵌入式代码生成；qpOASES 是 active-set，在小规模、热启动的问题上很快。人形带落脚点变量的 QP，变量 100–300、约束 300–800，单次 1–5 ms（量级估计）；四足纯接触力的版本报道过 &lt;1 ms（Di Carlo 2018，0.5 s 视界）。重规划 20–100 Hz：OCS2 的腿式例程是 50 Hz MPC 加 400 Hz 跟踪。热启动用上一次的解做初值，时间约为冷启动的 1/3。</p>
+
+  <p>滚动执行只走第一步，下一周期用新状态重解。这里有个容易忽略的细节：解出的 p<sub>0</sub> 是给「决策时刻」的，但指令到关节要 30 ms——把状态按延迟外推 30 ms 再解，或者把整条解后移一个延迟。不补，30 ms 在 ω = 3.5 下相当于 10% 的相位误差，表现为持续的小幅前后晃。</p>
+
+  <aside class="callout callout--field" data-reveal>
+    <p class="callout-kicker">工程经验 <span>Field Note</span></p>
+    <p>MPC 的视界与重规划频率是两个独立的旋钮，别一起调。视界决定「能不能提前看到」，重规划频率决定「看到变化后多久改主意」。1.6 s 视界配 30 ms 重规划是常见组合；把视界拉到 3 s 只会让模型误差和接触序列的不确定性吃掉收益。</p>
+  </aside>
+
+  <p>下面这段是伪代码，把一个水平轴的 MPC 从离散化写到求解，省略了另一轴、偏航、接触力分配与可行性恢复。重点看两处：A、B 是怎么从 cosh/sinh 来的，以及 Q、R 与四类约束各自对应什么物理量。</p>
+
+  <pre data-lang="cpp"><code><span class="tok-c">// 单刚体 MPC · 单轴 · 伪代码（省略另一轴、偏航、接触力分配）</span>
+<span class="tok-c">// 状态 x_k = [c_k, cdot_k]（m, m/s）；控制 p_k = ZMP（m）</span>
+<span class="tok-k">const</span> <span class="tok-k">double</span> w = sqrt(<span class="tok-n">9.81</span> / z_c);   <span class="tok-c">// z_c=0.8 → w=3.50 rad/s</span>
+<span class="tok-c">// ZOH 离散化（dt = 0.1 s）：</span>
+<span class="tok-c">//   A = [[cosh, sinh/w], [w*sinh, cosh]]</span>
+<span class="tok-c">//   B = [[1-cosh], [-w*sinh]] = [-0.062, -1.250]</span>
+Mat2 A = { { cosh(w*dt),     sinh(w*dt)/w },
+           { w*sinh(w*dt),   cosh(w*dt)   } };
+Vec2 B = { <span class="tok-n">1.0</span> - cosh(w*dt), -w*sinh(w*dt) };
+
+<span class="tok-c">// 目标：Σ (x_k - x_ref)^T Q (x_k - x_ref)</span>
+<span class="tok-c">//      + (p_k - p_ref)^T R (p_k - p_ref)</span>
+<span class="tok-c">// Q = diag(1.0, 0.1)：位置 1 m 与速度 1 m/s 的等价代价</span>
+<span class="tok-c">//   Q 大 → 更贴参考、ZMP 更抖</span>
+<span class="tok-c">// R = 0.01：ZMP 偏离参考的代价</span>
+<span class="tok-c">//   R 大 → ZMP 更平滑、质心跟踪更慢</span>
+Mat2 Q = diag(<span class="tok-n">1.0</span>, <span class="tok-n">0.1</span>);
+<span class="tok-k">double</span> R = <span class="tok-n">0.01</span>;
+
+<span class="tok-k">for</span> (<span class="tok-k">int</span> k = <span class="tok-n">0</span>; k &lt; N; ++k) {   <span class="tok-c">// N=16 步 × 0.1 s = 1.6 s</span>
+  <span class="tok-c">// 1) 动力学：x_{k+1} = A x_k + B p_k</span>
+  <span class="tok-c">// 2) 支撑多边形：p_k 属于 P(phase_k)</span>
+  <span class="tok-c">// 3) 步长：0.10 &lt;= |s_{j+1} - s_j| &lt;= 0.50（m）</span>
+  <span class="tok-c">// 4) 摩擦：|p_k - c_k| &lt;= mu*z_c（mu=0.6 → 0.48 m）</span>
+  <span class="tok-c">// 5) 力矩：tau_min &lt;= tau &lt;= tau_max（WBC 可行域）</span>
+}
+solver.solve(qp, warm_start);   <span class="tok-c">// 1-5 ms；热启动约 1/3</span>
+apply(p[<span class="tok-n">0</span>]);                    <span class="tok-c">// 只执行第一步，下周期重解</span></code></pre>
+
+  <h2>与全身控制的分工</h2>
+  <p>这一节解决什么问题：说清两个优化器各自吃什么、吐什么，以及接口错了会怎样。</p>
+
+  <p>MPC 的模型是 LIPM，两个状态，频率 20–100 Hz，输出未来 1 s 的质心轨迹、落脚点与参考接触力。WBC 的模型是全身 n+6 维，频率 1 kHz，输入是任务与接触序列，输出关节力矩。两者靠一个窄接口耦合：MPC 给 WBC 一组任务（质心加速度、姿态、摆动脚轨迹）与接触时序，WBC 返回可达性——力矩够不够、摩擦够不够。</p>
+
+  <p>如果 WBC 解不出，说明 MPC 的假设错了。这时只有两条路：降级（放弃手臂任务，保平衡）或者重规划（缩短步长、提前落脚）。把不可行当成「调权重」来处理，是分层架构里最常见的错误。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 6.2 质心 MPC 与全身控制的分工</caption>
+      <thead>
+        <tr><th>维度</th><th>质心 MPC</th><th>全身控制 WBC</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>模型</td><td>LIPM，每轴 2 个状态</td><td>浮基动力学，n+6 维</td></tr>
+        <tr><td>频率</td><td>20–100 Hz</td><td>1 kHz</td></tr>
+        <tr><td>决策变量</td><td>质心轨迹、ZMP、落脚点</td><td>关节加速度、接触力</td></tr>
+        <tr><td>输出</td><td>未来 1 s 的任务与接触序列</td><td>关节力矩 τ</td></tr>
+        <tr><td>约束</td><td>支撑多边形、步长、摩擦</td><td>力矩上限、摩擦锥、关节限位</td></tr>
+        <tr><td>失效表现</td><td>落点错，走成碎步或越走越偏</td><td>力矩饱和，跟踪滞后，关节抖动</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>图 6.5 是这条链的延迟账：感知 10 ms、MPC 30 ms、WBC 1 ms、力矩环 0.05 ms，合计约 41 ms。把 WBC 从 1 kHz 提到 2 kHz 只省 0.5 ms，而把 MPC 的重规划周期从 30 ms 压到 10 ms 能省 20 ms。优化要花在分子大的地方。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 320" role="img" aria-labelledby="ch06-fig5-title ch06-fig5-desc">
+      <title id="ch06-fig5-title">一条控制指令的延迟预算</title>
+      <desc id="ch06-fig5-desc">横轴为时间 0 到 50 毫秒。感知与状态估计占 10 毫秒，质心 MPC 占 30 毫秒，全身控制占 1 毫秒，力矩环占 0.05 毫秒，总计约 41 毫秒。</desc>
+      <defs>
+        <marker id="ch06-fig5-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d2)"/>
+        </marker>
+        <marker id="ch06-fig5-arrow-d1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d1)"/>
+        </marker>
+      </defs>
+      <rect x="92.0" y="118" width="94.0" height="44" style="fill:var(--d3);fill-opacity:.88"/>
+      <text x="102.0" y="138.0" class="t-label" style="font-size:12px;fill:var(--paper);">感知与状态估计</text>
+      <text x="102.0" y="154.0" class="t-mono" style="font-size:11px;fill:var(--paper);">10 ms</text>
+      <rect x="186.0" y="118" width="282.0" height="44" style="fill:var(--d1);fill-opacity:.88"/>
+      <text x="196.0" y="138.0" class="t-label" style="font-size:12px;fill:var(--paper);">质心 MPC</text>
+      <text x="196.0" y="154.0" class="t-mono" style="font-size:11px;fill:var(--paper);">30 ms</text>
+      <rect x="468.0" y="118" width="9.4" height="44" style="fill:var(--d2);fill-opacity:.88"/>
+      <!-- 1 ms 段按比例只有 9.4 px；0.05 ms 在同一比例尺下不足 1 px，用折断符号单独画出来 -->
+      <line x1="472.7" y1="118" x2="482" y2="109" style="stroke:var(--d2);stroke-width:1"/>
+      <text x="486" y="111" class="t-label" style="font-size:11px;fill:var(--ink-2)">WBC 1 ms</text>
+
+      <path d="M477.4 160 L483 158" style="fill:none;stroke:var(--signal);stroke-width:1"/>
+      <path d="M484 155 l4 4 M484 159 l4 -4" style="fill:none;stroke:var(--signal);stroke-width:1"/>
+      <rect x="490" y="154" width="6" height="14" style="fill:var(--signal);fill-opacity:.85"/>
+      <text x="500" y="160" class="t-label" style="font-size:11px;fill:var(--signal-ink)">力矩环 0.05 ms</text>
+      <text x="500" y="174" class="t-label" style="font-size:10px;fill:var(--muted-ink)">非等比，实际 &lt; 1 px</text>
+      <line x1="477.4" y1="74" x2="477.4" y2="248" style="stroke:var(--d2);stroke-width:1;stroke-dasharray:4 3"/>
+      <text x="467.4" y="84.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--accent-2-ink);">指令到达关节 41 ms</text>
+      <rect x="92" y="196" width="9.4" height="16" style="fill:var(--d2);fill-opacity:.88"/>
+      <text x="106.0" y="209.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">1 ms（同一个 1 kHz 控制周期，按比例）</text>
+      <line x1="92" y1="248" x2="562.0" y2="248" style="stroke:var(--line-2);stroke-width:1"/>
+      <line x1="92.0" y1="248" x2="92.0" y2="253" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="92.0" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">0</text>
+      <line x1="186.0" y1="248" x2="186.0" y2="253" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="186.0" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">10</text>
+      <line x1="280.0" y1="248" x2="280.0" y2="253" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="280.0" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">20</text>
+      <line x1="374.0" y1="248" x2="374.0" y2="253" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="374.0" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">30</text>
+      <line x1="468.0" y1="248" x2="468.0" y2="253" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="468.0" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">40</text>
+      <line x1="562.0" y1="248" x2="562.0" y2="253" style="stroke:var(--line-2);stroke-width:1"/>
+      <text x="562.0" y="267.0" class="t-mono" text-anchor="middle" style="font-size:10px;fill:var(--muted-ink);">50</text>
+      <text x="562.0" y="240.0" class="t-label" text-anchor="end" style="font-size:12px;fill:var(--muted-ink);">时间 / ms</text>
+      <text x="92.0" y="296.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">占比：MPC 73%｜感知与估计 24%｜WBC 2.4%｜力矩环 0.1%</text>
+      <text x="92.0" y="314.0" class="t-label" style="font-size:11px;fill:var(--muted-ink);">41 ms 相当于 41 个 1 kHz 周期：延迟预算的大头在感知与 MPC，不在关节环。</text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 6.5</span>一条控制指令的延迟预算：从传感器到关节共约 41 ms。1 ms 的 WBC 段按同一比例尺画出（约 9 px），0.05 ms 的力矩环在同一比例尺下不足 1 px，图中用折断符号单独标出，那一段长度非等比。
+      <span class="fig-note read-for">读者应看出：力矩环只有 0.05 ms、WBC 只有 1 ms，延迟的 97% 花在感知与 MPC 上——想在「反应更快」上做文章，先动这两段。</span>
+      <span class="fig-src">来源：作者绘制，数值为公开系统的量级估计（感知 5–20 ms，MPC 20–50 ms）。</span>
+    </figcaption>
+  </figure>
+
+  <h2>三个旋钮：步频、步长、抬脚高度</h2>
+  <p>这一节解决什么问题：给你三个可调量，说清每个的收益和代价。</p>
+
+  <p>步频换稳定。1.25 步/秒 到 2.5 步/秒（单步周期 0.8 s 到 0.4 s），e<sup>ωT</sup> 从 16.4 降到 4.06，同样的落点误差在一步内的放大倍数降到四分之一。代价在摆动腿：角速度正比于步频，惯性力矩正比于步频的平方；1.3 m 的机器人从 1.25 提到 2.5 步/秒，摆动腿峰值力矩约涨 3–4 倍（量级估计）。运输代价（Cost of Transport, CoT）通常在 1.2–1.5 步/秒 附近最低（量级判断），再快就是拿电换稳定。</p>
+
+  <p>步长换速度。<span class="formula-inline">v = S·f</span>，步长翻倍速度翻倍。代价在踝上：ZMP 偏移正比于步长，踝力矩也正比于步长。60 kg 机器人把步长从 0.35 m 提到 0.55 m，需要的 ZMP 偏移从 0.10 m 到 0.16 m，超过踝的 0.10 m 权限，只能借髋关节和上身角动量，或者干脆改成跑。</p>
+
+  <p>抬脚高度换越障。代价是落地冲击：35 kg 的腿抬到 15 cm、摆动 0.25 s，落地垂直速度约 1.2 m/s；若 20 ms 内停住，冲击力 35×1.2/0.02 = 2100 N，约 6 倍体重。所以平地不会抬 15 cm——3–5 cm 够用，8 cm 是「有感知但不想付冲击代价」的折中。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 6.3 三个旋钮的收益、代价与硬上限</caption>
+      <thead>
+        <tr><th>调大</th><th>得到什么</th><th>付出什么</th><th>卡在哪里</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>步频 f</td><td>单步放大 e<sup>ωT</sup> 变小，抗扰变强</td><td>摆动腿力矩 ∝ f²，CoT 上升</td><td>摆动腿角速度、关节带宽</td></tr>
+        <tr><td>步长 S</td><td>速度 v = S·f 上升</td><td>ZMP 偏移 ∝ S，踝力矩 ∝ S</td><td>踝力矩、腿长与髋关节行程</td></tr>
+        <tr><td>抬脚高度</td><td>越障、抗绊倒</td><td>落地冲击 ∝ h/Δt</td><td>冲击力、膝关节寿命</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>三个真实系统：ASIMO、Atlas、Cassie</h2>
+  <p>这一节解决什么问题：看三个真实系统怎么在同一组取舍上做不同选择。</p>
+
+  <p>ASIMO（Honda，2000–2011）走的是 ZMP 预览控制加在线步态生成，底层位置伺服。48 kg、1.30 m，2011 版标称 9 km/h。这样选的收益是确定、可解释、可重复：同一段楼梯走一万次，结果一样。代价是它假设 ZMP 被精确跟踪，地形和强扰动下适应差，2018 年项目终止。<a href="https://doi.org/10.1109/ROBOT.2003.1241826">Kajita 2003</a> 的预览控制是这条路线的方法论底座。</p>
+
+  <p>Atlas（MIT 与 Boston Dynamics，2016）走的是混合整数落脚点规划、质心 MPC、全身 QP 的分层优化。收益是非结构化地形和外力扰动下仍能走；代价是模型与标定要求高、算力大、调试链长。<a href="https://doi.org/10.1007/s10514-015-9479-3">Kuindersma 2016</a> 把这条链完整写了一遍：规划、MPC、WBC 与状态估计怎么接。</p>
+
+  <p>Cassie（Agility，2017）走的是另一条：离线优化一条周期轨道（虚拟约束），在线只做输入-输出线性化跟踪，落点用 DCM 修正。在线计算极省，步态自然，代价是换速度或地形要重算轨道。</p>
+
+  <p>一句话：ASIMO 用精确模型换可靠性，Atlas 用优化换鲁棒，Cassie 用离线算换在线省。三种选择今天都还在用，因为可靠性、鲁棒性和成本不可能同时按住。</p>
+
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[01]</span>
+      <div>
+        <p class="paper-title">Biped Walking Pattern Generation by using Preview Control of Zero-Moment Point</p>
+        <p class="paper-meta">Kajita 等 · ICRA, 2003 · 把 ZMP 跟踪写成带预览的 LQR，工业级步态生成的起点</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/ROBOT.2003.1241826">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[02]</span>
+      <div>
+        <p class="paper-title">Capture Point: A Step toward Humanoid Push Recovery</p>
+        <p class="paper-meta">Pratt 等 · Humanoids, 2006 · 把「何时迈步、迈到哪」变成闭式判据</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/ICHR.2006.321385">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[03]</span>
+      <div>
+        <p class="paper-title">Optimization-based locomotion planning, estimation, and control design for the Atlas humanoid robot</p>
+        <p class="paper-meta">Kuindersma 等 · Autonomous Robots, 2016 · 分层优化全栈：规划、MPC、WBC、估计如何接起来</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1007/s10514-015-9479-3">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[04]</span>
+      <div>
+        <p class="paper-title">Dynamic Locomotion in the MIT Cheetah 3 Through Convex Model-Predictive Control</p>
+        <p class="paper-meta">Di Carlo 等 · IROS, 2018 · 单刚体凸 MPC 的工程样板：0.5 s 视界、&lt;1 ms 求解</p>
+      </div>
+      <a class="paper-link" href="https://hdl.handle.net/1721.1/138000">PDF ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[05]</span>
+      <div>
+        <p class="paper-title">OCS2: 切换系统最优控制的实时 MPC 工程栈</p>
+        <p class="paper-meta">leggedrobotics · 开源 · 腿式 MPC 的参考实现，50 Hz MPC 加 400 Hz 跟踪</p>
+      </div>
+      <a class="paper-link" href="https://github.com/leggedrobotics/ocs2">GitHub ↗</a>
+    </li>
+  </ol>
+
+  <section class="takeaways" data-takeaways aria-labelledby="ch06-takeaways">
+    <p class="kicker" id="ch06-takeaways">本章要点 <span>Takeaways</span></p>
+    <ol>
+      <li><strong>双足只有一个真正危险的方向。</strong>+ω = √(g/z<sub>c</sub>) 的发散模态；LIPM、ZMP、DCM 只是描述它的三套坐标，步态算法的差别在于什么时候用落点去兑换它。</li>
+      <li><strong>ZMP 是约束，不是判据。</strong>它必须落在支撑多边形内，但出界不等于摔——能不能救，取决于捕获点是否还能被下一步捕获。</li>
+      <li><strong>1.6 s 的视界是算出来的。</strong>5.6 个时间常数之外的影响按 e<sup>−5.6</sup> = 0.4% 衰减，与 6 s 窗的数值差 1.04 mm。</li>
+      <li><strong>三个旋钮花的是同一种货币。</strong>步频换稳定、步长换速度、抬脚高度换越障，付的都是关节力矩与落地冲击。</li>
+    </ol>
+  </section>
+
+  <a class="next-chapter" href="#ch-07">
+    <span class="next-kicker">下一章 · Next</span>
+    <span class="next-title">07｜强化学习与 Sim2Real：在仿真里摔一百万次</span>
+    <span class="next-arrow" aria-hidden="true">→</span>
+  </a>
+
+  <style>
+    /* 公式点号：点绑定字母、但以基线为参照；全局规则以行高盒子定位，会飘到上一行 */
+    #ch-06 .qdot, #ch-06 .qddot { line-height: 1; vertical-align: baseline; }
+    #ch-06 .qdot::after, #ch-06 .qddot::after, #ch-06 .qddot::before { top: auto; bottom: .78em; }
+    /* 函数名在行内公式里也要正体 */
+    #ch-06 .formula-inline .fn { font-style: normal; }
+    /* 长节标题断行平衡，避免末尾只剩两三个字的孤儿行 */
+    #ch-06 > h2 { text-wrap: balance; }
+    #ch-06 .demo-readout { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+    #ch-06 .demo-stage canvas { display: block; width: 100%; height: clamp(220px, 34vw, 300px); }
+    #ch-06 .demo-controls button {
+      padding: 5px 12px; border: 1px solid var(--line-2); background: var(--paper);
+      color: var(--ink); font-family: var(--mono); font-size: 11px; letter-spacing: .04em;
+      border-radius: 2px; cursor: pointer;
+    }
+    #ch-06 .demo-controls button:hover { border-color: var(--accent); color: var(--accent); }
+    #ch-06 .demo-controls button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+    #ch-06 .demo-controls button[hidden] { display: none; }
+    #ch-06 .demo-note {
+      margin: 0; padding: 12px 16px 14px; border-top: 1px solid var(--line);
+      background: var(--paper-2); font-size: 12px; line-height: 1.8; color: var(--muted-ink);
+    }
+    #ch-06 .demo-note strong { color: var(--signal-ink); font-weight: 600; }
+  </style>
+</section>

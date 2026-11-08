@@ -1,0 +1,633 @@
+<section class="chapter" id="ch-03" data-chapter="03">
+  <header class="chapter-head">
+    <div class="ch-meta">
+      <span class="ch-num" aria-hidden="true">03</span>
+      <p class="kicker">Hardware Systems</p>
+    </div>
+    <h2>硬件系统：电机、<br class="ch-head-br">驱动、传感、电源与算力</h2>
+    <p class="lede">第 02 章把「膝要 90 N·m」算成了一个数，这一章看这个数能不能被一台真机器持续交付。读完你能给关节选电机与驱动器、画出它的转矩—转速包络并判断工作点是否越界，也能说清电源、总线与算力为什么是同一个设计问题的四个面。</p>
+  </header>
+
+  <h2>从电池到地面：一条只剩六成的链</h2>
+  <p>这一节解决一个问题：膝关节要的 90 N·m 究竟从电池的哪一度电里来，一路上丢了多少。</p>
+  <p>把人形拆成一条能量链，只有七个环节：电芯 → 电池管理系统（Battery Management System, BMS）→ 48 V 母线 → 三相桥 → 电机 → 减速器 → 关节 → 地面。控制算法再漂亮，最后交付到地面的也只有链末端那一点力矩。每一环都有自己的效率，乘起来才是整机效率。</p>
+  <p>取一组常见值：电池放电 0.98、BMS 与母线 0.98、三相桥 0.96、电机 0.87、减速器 0.80、轴承与足底滑移 0.92。乘起来是 0.59。也就是说，一个 60 kg 的人形以 1.2 m/s 行走、机械功率约 420 W 时，电池要输出 710 W，其中 290 W 直接变成热。这条链上没有哪一环特别差，差的是它们乘在一起。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 320" role="img" aria-labelledby="ch03-fig1-title ch03-fig1-desc">
+<title id="ch03-fig1-title">从电池到地面的六级效率链</title>
+<desc id="ch03-fig1-desc">六条横向条形，从左到右表示累计效率 0 到 100 百分比。电池放电 98%、BMS 与母线 96.0%、三相桥 92.2%、电机 80.2%、减速器 64.2%、关节与足底 59.0%。每条末端的深色段是本环节损失掉的百分点。</desc>
+<rect x="144" y="40" width="412" height="20" style="fill:var(--paper-2)"/>
+<rect x="144" y="40" width="403.76" height="20" style="fill:var(--d1)"/>
+<rect x="547.76" y="40" width="8.24" height="20" style="fill:var(--d2)"/>
+<text x="4" y="54" font-size="12.5" style="fill:var(--ink)">电池放电<tspan class="t-mono" font-size="12" style="fill:var(--muted-ink)"> ×0.98</tspan></text>
+<text x="596" y="54" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--ink-2)">98%</text>
+<rect x="144" y="74" width="412" height="20" style="fill:var(--paper-2)"/>
+<rect x="144" y="74" width="395.52" height="20" style="fill:var(--d1)"/>
+<rect x="539.52" y="74" width="8.24" height="20" style="fill:var(--d2)"/>
+<text x="4" y="88" font-size="12.5" style="fill:var(--ink)">BMS 与母线<tspan class="t-mono" font-size="12" style="fill:var(--muted-ink)"> ×0.98</tspan></text>
+<text x="596" y="88" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--ink-2)">96%</text>
+<rect x="144" y="108" width="412" height="20" style="fill:var(--paper-2)"/>
+<rect x="144" y="108" width="379.86" height="20" style="fill:var(--d1)"/>
+<rect x="523.86" y="108" width="15.66" height="20" style="fill:var(--d2)"/>
+<text x="4" y="122" font-size="12.5" style="fill:var(--ink)">三相桥<tspan class="t-mono" font-size="12" style="fill:var(--muted-ink)"> ×0.96</tspan></text>
+<text x="596" y="122" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--ink-2)">92.2%</text>
+<rect x="144" y="142" width="412" height="20" style="fill:var(--paper-2)"/>
+<rect x="144" y="142" width="330.42" height="20" style="fill:var(--d1)"/>
+<rect x="474.42" y="142" width="49.44" height="20" style="fill:var(--d2)"/>
+<text x="4" y="156" font-size="12.5" style="fill:var(--ink)">电机<tspan class="t-mono" font-size="12" style="fill:var(--muted-ink)"> ×0.87</tspan></text>
+<text x="596" y="156" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--ink-2)">80.2%</text>
+<rect x="144" y="176" width="412" height="20" style="fill:var(--paper-2)"/>
+<rect x="144" y="176" width="264.5" height="20" style="fill:var(--d1)"/>
+<rect x="408.5" y="176" width="65.92" height="20" style="fill:var(--d2)"/>
+<text x="4" y="190" font-size="12.5" style="fill:var(--ink)">减速器<tspan class="t-mono" font-size="12" style="fill:var(--muted-ink)"> ×0.80</tspan></text>
+<text x="596" y="190" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--ink-2)">64.2%</text>
+<rect x="144" y="210" width="412" height="20" style="fill:var(--paper-2)"/>
+<rect x="144" y="210" width="243.08" height="20" style="fill:var(--d1)"/>
+<rect x="387.08" y="210" width="21.42" height="20" style="fill:var(--d2)"/>
+<text x="4" y="224" font-size="12.5" style="fill:var(--ink)">关节与足底<tspan class="t-mono" font-size="12" style="fill:var(--muted-ink)"> ×0.92</tspan></text>
+<text x="596" y="224" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--ink-2)">59%</text>
+<line x1="144" y1="252" x2="556" y2="252" style="stroke:var(--line-2);stroke-width:1"/>
+<line x1="144" y1="252" x2="144" y2="257" style="stroke:var(--line-2);stroke-width:1"/>
+<text x="144" y="272" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">0</text>
+<line x1="247" y1="252" x2="247" y2="257" style="stroke:var(--line-2);stroke-width:1"/>
+<text x="247" y="272" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">25</text>
+<line x1="350" y1="252" x2="350" y2="257" style="stroke:var(--line-2);stroke-width:1"/>
+<text x="350" y="272" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">50</text>
+<line x1="453" y1="252" x2="453" y2="257" style="stroke:var(--line-2);stroke-width:1"/>
+<text x="453" y="272" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">75</text>
+<line x1="556" y1="252" x2="556" y2="257" style="stroke:var(--line-2);stroke-width:1"/>
+<text x="556" y="272" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">100</text>
+<text x="144" y="296" class="t-mono" font-size="12" style="fill:var(--muted-ink)">累计效率 / %　（末端深色段 = 本环节损耗）</text>
+</svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 3.1</span>从电芯到地面的六级效率链：每级的典型效率、累计值与损耗的百分点。
+      <span class="fig-note read-for">读者应看出：最大的两处损耗在电机（12 个百分点）和减速器（16 个百分点），不在「电线」或「电池」；整链只剩 59%，所以同样一个动作，电池要按 1.7 倍付账。</span>
+      <span class="fig-src">来源：作者绘制，效率取自行星/谐波减速器与 MOSFET 数据手册的典型区间。</span>
+    </figcaption>
+  </figure>
+
+  <div class="stat-row" data-reveal>
+    <div class="stat">
+      <span class="stat-value">48<small>V</small></span>
+      <span class="stat-label">母线电压</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">59<small>%</small></span>
+      <span class="stat-label">整链效率</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">119<small>N·m</small></span>
+      <span class="stat-label">示例膝峰值</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">2<small>kHz</small></span>
+      <span class="stat-label">电流环带宽</span>
+    </div>
+  </div>
+
+  <p>三处损耗各有各的物理。电机是铜损 <span class="formula-inline">I²R</span>：相电流 40 A、相电阻 0.05 Ω、三相同时导通，就是 240 W，而这台电机额定才 300–500 W，所以铜损是主要热源。减速器是摩擦与搅油：谐波 70–85%，两级行星 90–95%，同一台电机换减速器，连续力矩能差 20%。三相桥是导通加开关：40 A 下每只 MOSFET 约 3 W，六只十几瓦，靠 2 oz 铜箔和铝基板散掉。</p>
+  <p>热是最终的约束。绕组 120–150 °C、MOSFET 结温 150–175 °C、钕铁硼磁钢 80–120 °C 开始不可逆退磁。于是同一台电机有两个力矩：峰值靠热容，能撑 1–10 s；连续靠热阻，能撑一辈子。两者通常差 2–4 倍，这个比值不是厂家保守，是热阻和热容的比值。</p>
+
+  <h2>无刷电机与 FOC：把电流变成力矩</h2>
+  <p>这一节解决一个问题：驱动器只有一条 48 V 直流母线，凭什么在电机里造出一个幅值和方向都可控的旋转磁场。</p>
+  <p>无刷电机的定子有三组绕组，空间上互差 120°；转子是永磁体，<span class="formula-inline">p</span> 对极。没有电刷，换相只能由电路完成：先知道转子在哪，再在正确的时刻把电流切到正确的相。</p>
+
+  <h3>六步换相：便宜，但每 60° 跳一次</h3>
+  <p>最省事的做法是六步换相（six-step commutation）：三个霍尔传感器把一圈分成六个扇区，每个扇区导通两相、悬空一相，每 60° 电角度换一次。电路只要 6 个 MOSFET（金属氧化物半导体场效应管，开关管）和 3 个霍尔传感器，成本最低。代价是电流矢量在空间里跳着走——它只能停在六个方向上，相对 q 轴有 ±30° 的误差，而转矩正比于这个夹角的余弦，于是转矩以 6 倍电频率脉动，峰谷差 <span class="formula-inline">1 − cos 30° = 13.4%</span>。低速时你能听见这个频率的嗡嗡声，也能在力传感器上看到它。</p>
+
+  <h3>FOC：把坐标系搬到转子上</h3>
+  <p>磁场定向控制（Field-Oriented Control, FOC）换了个问法：不去管三相各自该多少安，而是问「相对于转子，电流应该指向哪」。把三相电流投影到一个跟着转子转的坐标系里，产生力矩的分量叫 q 轴电流，只发热不产力矩的叫 d 轴电流。控制器要做的事只剩两件：把 d 轴压到 0，把 q 轴给到目标值。</p>
+  <p>两步变换。Clarke 变换把三相压成两相静止坐标 αβ，少掉一个自由度（三线无中线，三相电流之和恒为零）：</p>
+  <div class="formula-block">
+    <span class="formula">i<sub>α</sub> = i<sub>a</sub><span class="op">，</span>i<sub>β</sub> = (i<sub>a</sub> + 2i<sub>b</sub>) / √3</span>
+    <span class="formula-no">3.1</span>
+  </div>
+  <p>Park 变换再把 αβ 转到随转子旋转的 dq。这一步是整个 FOC 的关键：变换之后，原本以电频率正弦变化的电流变成了两个直流量，PI 控制器终于可以没有稳态误差地跟踪它。</p>
+  <div class="formula-block">
+    <span class="formula">i<sub>d</sub> = i<sub>α</sub>cos θ<sub>e</sub> + i<sub>β</sub>sin θ<sub>e</sub><span class="op">，</span>i<sub>q</sub> = −i<sub>α</sub>sin θ<sub>e</sub> + i<sub>β</sub>cos θ<sub>e</sub></span>
+    <span class="formula-no">3.2</span>
+  </div>
+  <p>变换完之后，力矩关系简单得不像话：</p>
+  <div class="formula-block">
+    <span class="formula">τ = (3/2)·p·ψ<sub>f</sub>·i<sub>q</sub><span class="op">，</span>K<sub>t</sub> = τ / i<sub>q</sub> = (3/2)·p·ψ<sub>f</sub></span>
+    <span class="formula-no">3.3</span>
+  </div>
+  <p><span class="formula-inline">ψ<sub>f</sub></span> 是永磁体磁链：永磁体穿过一相绕组的磁通量，单位 Wb；<span class="formula-inline">p</span> 是磁极对数。三相电流合成后力矩 = <span class="formula-inline">(3/2)·p·ψ<sub>f</sub>·i<sub>q</sub></span>，3/2 来自等幅值 Clarke 变换；先把它当比例常数 <span class="formula-inline">K<sub>t</sub></span> 用也可以。一台 <span class="formula-inline">K<sub>t</sub> = 0.11 N·m/A</span> 的电机，想要 8 N·m 就下 73 A 的 <span class="formula-inline">i<sub>q</sub></span>。Kt 不是常数：磁钢温度每升 1 K 约降 0.1–0.2%，80 °C 温升就是 8–16% 的力矩误差。靠电流估力矩的执行器必须做温度补偿，否则机器人热起来之后，同一条腿会「变软」。</p>
+
+  <p><strong>电流得先测准。</strong>FOC 的前提是知道三相电流。常见做法是三个下桥臂各串一个 0.5–1 mΩ 的分流电阻，在脉冲宽度调制（Pulse-Width Modulation, PWM）周期的中点触发模数转换器（Analog-to-Digital Converter, ADC）——此刻下桥臂导通，相电流全部流过电阻。采样窗口只有 1–2 µs，12 bit ADC、±50 A 量程对应 24 mA 的分辨率。</p>
+  <p>上下桥臂不能同时导通，必须插死区（dead time），典型 0.5–1 µs。20 kHz 的周期是 50 µs，1 µs 死区占 2%，每个开关周期都带来约 2% 的电压误差。低速小电流时这个误差比 PI 的输出还大，表现为低速转矩脉动和电流过零畸变，工程上按电流方向把死区电压补回去。</p>
+  <p>最后一步把 <span class="formula-inline">(v<sub>d</sub>, v<sub>q</sub>)</span> 变回三相占空比。空间矢量脉宽调制（Space-Vector PWM, SVPWM）把 8 个基本矢量拼成一个六边形，线性区能输出的最大相电压是 <span class="formula-inline">V<sub>dc</sub>/√3</span>，48 V 母线对应 27.7 V。想要更高只能进过调制，波形开始失真、电流谐波上升。</p>
+
+  <h3>带宽：20 kHz 开关只买到 2 kHz 电流环</h3>
+  <div class="formula-block">
+    <span class="formula">f<sub>bw</sub> ≈ f<sub>pwm</sub> / 10</span>
+    <span class="formula-no">3.4</span>
+  </div>
+  <p>这条经验式来自延迟：采样在周期中点、计算要一个周期、PWM 下一个周期才生效，合起来约 1.5 个开关周期。20 kHz 开关对应 2 kHz 电流环；在 2 kHz 处，75 µs 的延迟已经是 <span class="formula-inline">360° × 2000 × 75 µs = 54°</span> 的相位滞后，相位裕度被吃掉一半。所以 20 kHz 的驱动器实际能给的力矩带宽是 1–2 kHz，这也是整条控制链里最快的一环——位置环只能到 1 kHz，感知在 30–100 Hz，规划在 10 Hz。</p>
+
+  <section class="demo" data-demo="foc" aria-labelledby="demo31-title">
+    <div class="demo-bar">
+      <span class="demo-live"><i aria-hidden="true"></i>Live</span>
+      <h4 class="demo-title" id="demo31-title">FOC 与六步：电流矢量怎么走</h4>
+      <span class="demo-tag">Demo 3.1</span>
+    </div>
+    <div class="demo-stage">
+      <div class="foc-wrap">
+        <canvas data-part="phasor" role="img" aria-label="定子三相轴 A、B、C 互差 120 度，铜色箭头为电流合成矢量，灰色磁钢为转子 d 轴"></canvas>
+        <canvas data-part="wave" role="img" aria-label="A、B 两相电流随电角度的波形，窗口为两个电周期"></canvas>
+      </div>
+    </div>
+    <div class="demo-controls">
+      <label for="foc-speed">电角速度</label>
+      <input id="foc-speed" data-control="speed" type="range" min="0" max="100" step="1" value="45">
+      <output class="demo-out" for="foc-speed" data-out="speed">162 °/s</output>
+      <label for="foc-load">负载转矩</label>
+      <input id="foc-load" data-control="load" type="range" min="0" max="20" step="0.5" value="12">
+      <output class="demo-out" for="foc-load" data-out="load">12.0 N·m</output>
+    </div>
+    <div class="demo-controls">
+      <button type="button" data-control="six" aria-pressed="false">六步换相</button>
+      <button type="button" data-control="foc" aria-pressed="true">FOC</button>
+      <button type="button" data-control="step" class="foc-step">单步 +15°</button>
+      <span class="foc-hint">切换两种换相方式，比较 iq 是否恒定</span>
+    </div>
+    <dl class="demo-readout">
+      <div><dt>iα</dt><dd><span data-readout="ialpha">0.0</span><small>A</small></dd></div>
+      <div><dt>iβ</dt><dd><span data-readout="ibeta">0.0</span><small>A</small></dd></div>
+      <div><dt>id</dt><dd><span data-readout="id">0.0</span><small>A</small></dd></div>
+      <div><dt>iq</dt><dd><span data-readout="iq">0.0</span><small>A</small></dd></div>
+    </dl>
+    <p class="foc-note">三相电流按 <span class="formula-inline">i<sub>a</sub> = I<sub>m</sub>cos θ<sub>e</sub></span> 生成，合成矢量幅值 1.5·I<sub>m</sub>、方向 θ<sub>e</sub>。读数用三相直接相加的口径（不乘 2/3），比等幅值 Clarke 大 1.5 倍，力矩比例不变。转子 d 轴画在电流矢量之后 90°，所以 FOC 时 i<sub>q</sub> 满幅、i<sub>d</sub>≈0；切到六步，i<sub>d</sub> 在正负之间来回摆，那部分电流只发热。id 的另一个用途是弱磁：进入恒功率区后把它给成负值，用定子电流削掉一部分磁链，才能继续升速。</p>
+  </section>
+
+  <p>把这套变换写成中断服务程序，一个 20 kHz 的电流环只有二十来行。下面这段是 C++，省略了编码器校准、参数辨识与故障恢复。</p>
+  <pre data-lang="cpp"><code><span class="tok-c">// 20 kHz 电流环：一次中断走完 采样 → Clarke → Park → PI → 反 Park → SVPWM</span>
+<span class="tok-k">void</span> <span class="tok-f">ADC_Injected_IRQHandler</span>(<span class="tok-k">void</span>) {   <span class="tok-c">// PWM 中点触发，躲开开关噪声</span>
+  <span class="tok-k">float</span> ia = <span class="tok-f">read_phase_a</span>();    <span class="tok-c">// 下桥臂 0.5 mΩ 分流电阻，12 bit</span>
+  <span class="tok-k">float</span> ib = <span class="tok-f">read_phase_b</span>();
+  <span class="tok-k">float</span> ic = -ia - ib;           <span class="tok-c">// 三线无中线：基尔霍夫定律省一路 ADC</span>
+
+  <span class="tok-k">float</span> th = <span class="tok-f">encoder_electrical</span>();  <span class="tok-c">// 机械角 × 极对数，已补 1.5 周期延迟</span>
+  <span class="tok-k">float</span> i_alpha = ia;               <span class="tok-c">// Clarke（等幅值，省掉 2/3 系数）</span>
+  <span class="tok-k">float</span> i_beta  = (ia + <span class="tok-n">2.0f</span> * ib) * <span class="tok-n">0.57735f</span>;
+
+  <span class="tok-k">float</span> c = <span class="tok-f">cosf</span>(th), s = <span class="tok-f">sinf</span>(th);
+  <span class="tok-k">float</span> id =  i_alpha * c + i_beta * s;   <span class="tok-c">// Park：搬到随转子旋转的 dq 系</span>
+  <span class="tok-k">float</span> iq = -i_alpha * s + i_beta * c;
+
+  <span class="tok-k">float</span> vd = <span class="tok-f">pi_run</span>(&amp;pi_d, <span class="tok-n">0.0f</span> - id);   <span class="tok-c">// 表贴式电机：id* = 0</span>
+  <span class="tok-k">float</span> vq = <span class="tok-f">pi_run</span>(&amp;pi_q, iq_ref - iq);  <span class="tok-c">// iq_ref = tau_ref / Kt</span>
+  <span class="tok-f">svpwm</span>(vd * c - vq * s,              <span class="tok-c">// 反 Park 回 αβ</span>
+        vd * s + vq * c, <span class="tok-f">vbus</span>());
+
+  <span class="tok-k">if</span> (<span class="tok-f">overcurrent_flag</span>()) <span class="tok-f">pwm_disable</span>();  <span class="tok-c">// 比较器 &lt;100 µs</span>
+}</code></pre>
+
+  <h2>驱动器：电压、电流与热的三个上限</h2>
+  <p>这一节解决一个问题：同一台电机换一块驱动板，峰值力矩可能差一倍；母线电压到底买到了什么。</p>
+  <p>驱动器只有三个上限：电压、电流、温度。三者谁先到，工作点就被谁卡住，包络的形状就是这三个约束的交集。</p>
+
+  <p><strong>电压是第一个上限。</strong>13 串锂离子电芯：3.7 V 标称 × 13 = 48.1 V，满电 4.2 × 13 = 54.6 V，放到 3.0 V 截止是 39 V。这个数字刚好压在安全特低电压（Safety Extra-Low Voltage, SELV）60 V 直流边界之下，又能把 2 kW 的功率压在 42 A。24 V 系统同样功率要 83 A，线损是 4 倍；72 V（20 串，满电 84 V）能继续降电流，但越过 60 V 就要按危险电压做绝缘与安规。</p>
+  <p>电压在电机侧的作用写在电压圆里：电流能灌进去的前提是剩下的电压够抵消电阻压降和反电动势。</p>
+  <div class="formula-block">
+    <span class="formula">(ω<sub>e</sub>L<sub>q</sub>i<sub>q</sub>)² + (R·i<sub>q</sub> + ω<sub>e</sub>ψ<sub>f</sub>)² ≤ (V<sub>dc</sub>/√3)²</span>
+    <span class="formula-no">3.5</span>
+  </div>
+  <p>反电动势 <span class="formula-inline">ω<sub>e</sub>ψ<sub>f</sub></span> 随转速线性涨。到了某个转速，它把 <span class="formula-inline">V<sub>dc</sub>/√3</span> 吃光，电流再也灌不进去——这就是图 3.2 里的拐点。</p>
+  <p>保留 id 时，两个分量是 <span class="formula-inline">R·i<sub>d</sub> − ω<sub>e</sub>L<sub>q</sub>i<sub>q</sub></span> 与 <span class="formula-inline">R·i<sub>q</sub> + ω<sub>e</sub>L<sub>d</sub>i<sub>d</sub> + ω<sub>e</sub>ψ<sub>f</sub></span>；表贴式电机 Ld = Lq，id 只在平方项里出现，所以代码可以把负 id 写进常数项去扫弱磁。式中的 Lq 是 q 轴电感（H），ωe 是电角速度（rad/s）。</p>
+
+  <p><strong>电流与热是第二、第三个上限。</strong>MOSFET 的导通损耗是 <span class="formula-inline">I²R</span>：2 mΩ 的管子过 40 A 是 3.2 W，六只加起来十几瓦，靠 2 oz 铜箔和铝基板散掉。峰值电流由结温和母线电容纹波决定，通常给到连续的 2–3 倍，持续 1–10 s。控制里必须知道这个时间常数：跌倒恢复用满峰值 300 ms 没问题，连续 5 s 就会触温保，接下来 30 s 机器人只能出连续力矩。</p>
+
+  <p><strong>再生制动是最容易被漏掉的一条路径。</strong>减速时电机变成发电机，能量往回灌。一条腿的等效惯量按 0.5 kg·m²、从 10 rad/s 停下算，动能 <span class="formula-inline">½Jω² = 25 J</span>。这 25 J 如果全部灌进 1000 µF 的母线电容，电压会从 48 V 抬到 <span class="formula-inline">√(48² + 2×25/0.001) = 228 V</span>，电容和 MOSFET 一起炸。所以驱动器必须有回馈通路：要么电池能吸收（BMS 允许充电且不是满电），要么泄放电阻把能量烧掉。行走时膝盖每步都在做负功，回馈是常态而不是意外。</p>
+
+  <p>图 3.2 的包络来自一台 9:1 的准直驱（Quasi-Direct Drive, QDD）关节。准直驱的意思是减速比低到能反驱：外力推关节时电机跟着转，腿的反射惯量小、抗冲击，代价是电机必须自己做高扭矩密度。这类关节在常用转速内卡在电流与热上，转速一上去电压圆才接管——这两段的分界就是下面这张图要画的东西。</p>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 360" role="img" aria-labelledby="ch03-fig2-title ch03-fig2-desc">
+<title id="ch03-fig2-title">9:1 膝关节的转矩—转速包络</title>
+<desc id="ch03-fig2-desc">横轴关节转速 0 到 60 弧度每秒，纵轴关节转矩 0 到 130 牛米。峰值转矩 119 牛米在 35 弧度每秒前保持水平，之后因反电动势进入弱磁区而下降；60 V 母线把这段水平区延长到 45 弧度每秒。连续热限 34.7 牛米，在 52 弧度每秒附近降到零。</desc>
+<defs><clipPath id="ch03-fig2-plot"><rect x="78" y="40" width="492" height="228"/></clipPath></defs>
+<g clip-path="url(#ch03-fig2-plot)">
+<rect x="78" y="57.54" width="492" height="149.55" style="fill:var(--d2);fill-opacity:0.05"/>
+</g>
+<line x1="78" y1="40" x2="78" y2="268" class="grid"/>
+<text x="78" y="286" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">0</text>
+<line x1="160" y1="40" x2="160" y2="268" class="grid"/>
+<text x="160" y="286" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">10</text>
+<line x1="242" y1="40" x2="242" y2="268" class="grid"/>
+<text x="242" y="286" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">20</text>
+<line x1="324" y1="40" x2="324" y2="268" class="grid"/>
+<text x="324" y="286" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">30</text>
+<line x1="406" y1="40" x2="406" y2="268" class="grid"/>
+<text x="406" y="286" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">40</text>
+<line x1="488" y1="40" x2="488" y2="268" class="grid"/>
+<text x="488" y="286" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">50</text>
+<line x1="570" y1="40" x2="570" y2="268" class="grid"/>
+<text x="570" y="286" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">60</text>
+<line x1="78" y1="268" x2="570" y2="268" class="grid"/>
+<text x="70" y="272" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">0</text>
+<line x1="78" y1="215.38" x2="570" y2="215.38" class="grid"/>
+<text x="70" y="219.38" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">30</text>
+<line x1="78" y1="162.77" x2="570" y2="162.77" class="grid"/>
+<text x="70" y="166.77" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">60</text>
+<line x1="78" y1="110.15" x2="570" y2="110.15" class="grid"/>
+<text x="70" y="114.15" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">90</text>
+<line x1="78" y1="57.54" x2="570" y2="57.54" class="grid"/>
+<text x="70" y="61.54" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">120</text>
+<line x1="78" y1="40" x2="78" y2="268" class="axis"/>
+<line x1="78" y1="268" x2="570" y2="268" class="axis"/>
+<polyline points="78,207.09 86.2,207.09 94.4,207.09 102.6,207.09 110.8,207.09 119,207.09 127.2,207.09 135.4,207.09 143.6,207.09 151.8,207.09 160,207.09 168.2,207.09 176.4,207.09 184.6,207.09 192.8,207.09 201,207.09 209.2,207.09 217.4,207.09 225.6,207.09 233.8,207.09 242,207.09 250.2,207.09 258.4,207.09 266.6,207.09 274.8,207.09 283,207.09 291.2,207.09 299.4,207.09 307.6,207.09 315.8,207.09 324,207.09 332.2,207.09 340.4,207.09 348.6,207.09 356.8,207.09 365,207.09 373.2,207.09 381.4,207.09 389.6,207.09 397.8,207.09 406,207.57 414.2,209.09 422.4,211.43 430.6,214.4 438.8,217.99 447,222.09 455.2,226.59 463.4,231.8 471.6,237.62 479.8,244.54 488,252.76 496.2,264.51 504.4,268 512.6,268 520.8,268 529,268 537.2,268 545.4,268 553.6,268 561.8,268 570,268" fill="none" style="stroke:var(--d2);stroke-width:2"/>
+<polyline points="78,59.17 86.2,59.17 94.4,59.17 102.6,59.17 110.8,59.17 119,59.17 127.2,59.17 135.4,59.17 143.6,59.17 151.8,59.17 160,59.17 168.2,59.17 176.4,59.17 184.6,59.17 192.8,59.17 201,59.17 209.2,59.17 217.4,59.17 225.6,59.17 233.8,59.17 242,59.17 250.2,59.17 258.4,59.17 266.6,59.17 274.8,59.17 283,59.17 291.2,59.17 299.4,59.17 307.6,59.17 315.8,59.17 324,59.17 332.2,59.17 340.4,59.17 348.6,59.17 356.8,59.17 365,59.17 373.2,59.17 381.4,59.17 389.6,59.17 397.8,59.17 406,59.58 414.2,60.6 422.4,62.24 430.6,64.13 438.8,66.26 447,68.79 455.2,71.42 463.4,74.06 471.6,76.98 479.8,79.79 488,82.6 496.2,85.67 504.4,88.52 512.6,91.35 520.8,94.17 529,97.14 537.2,100.22 545.4,102.93 553.6,105.68 561.8,108.56 570,111.4" fill="none" style="stroke:var(--d3);stroke-width:2" stroke-dasharray="6 4"/>
+<polyline points="78,59.17 86.2,59.17 94.4,59.17 102.6,59.17 110.8,59.17 119,59.17 127.2,59.17 135.4,59.17 143.6,59.17 151.8,59.17 160,59.17 168.2,59.17 176.4,59.17 184.6,59.17 192.8,59.17 201,59.17 209.2,59.17 217.4,59.17 225.6,59.17 233.8,59.17 242,59.17 250.2,59.17 258.4,59.17 266.6,59.17 274.8,59.17 283,59.17 291.2,59.17 299.4,59.17 307.6,59.17 315.8,59.17 324,59.17 332.2,59.76 340.4,61.4 348.6,63.75 356.8,66.73 365,70.01 373.2,73.63 381.4,77.37 389.6,81.07 397.8,84.71 406,88.68 414.2,92.46 422.4,96.4 430.6,100.19 438.8,103.64 447,107.41 455.2,110.9 463.4,114.72 471.6,118.02 479.8,121.47 488,124.8 496.2,127.92 504.4,131.04 512.6,134.19 520.8,137.16 529,140.41 537.2,143.26 545.4,146.26 553.6,148.73 561.8,151.61 570,154.35" fill="none" style="stroke:var(--d1);stroke-width:2"/>
+<circle cx="176.4" cy="92.62" r="3.6" style="fill:var(--d4)"/>
+<line x1="179.4" y1="96.62" x2="201" y2="128.2" style="stroke:var(--line-2);stroke-width:.8"/>
+<text x="204" y="131.2" font-size="12.5" style="fill:var(--ink)">蹬地 100 N·m @ 12 rad/s</text>
+<text x="90.3" y="176.8" font-size="12" style="fill:var(--accent-2-ink)">峰值区：只能持续 0.1–1 s</text>
+<text x="90.3" y="225.91" font-size="12" style="fill:var(--d2)">连续热限 34.7 N·m，52 rad/s 后归零</text>
+<text x="324" y="316" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--ink-2)">关节转速 / rad·s⁻¹</text>
+<text x="24" y="154" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--ink-2)" transform="rotate(-90 24 154)">关节转矩 / N·m</text>
+<line x1="78" y1="342" x2="104" y2="342" style="stroke:var(--d1);stroke-width:2"/>
+<text x="110" y="346" font-size="12" style="fill:var(--ink-2)">峰值 @ 48 V</text>
+<line x1="225.8" y1="342" x2="251.8" y2="342" style="stroke:var(--d3);stroke-width:2" stroke-dasharray="6 4"/>
+<text x="257.8" y="346" font-size="12" style="fill:var(--ink-2)">峰值 @ 60 V</text>
+<line x1="373.6" y1="342" x2="399.6" y2="342" style="stroke:var(--d2);stroke-width:2"/>
+<text x="405.6" y="346" font-size="12" style="fill:var(--ink-2)">连续热限 @ 48 V</text>
+</svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 3.2</span>示例膝关节的转矩—转速包络：Kt = 0.11 N·m/A、9:1 行星、峰值相电流 120 A、连续 35 A，48 V 与 60 V 两条母线。
+      <span class="fig-note read-for">读者应看出：0–35 rad/s 是恒转矩区，此后反电动势开始吃掉电压圆，转矩按 1/ω 塌陷；连续热限只有峰值的 29%，落在两条线之间就只能撑秒级。52 rad/s 之后弱磁把电流预算全花光，连连续力矩都是零。</span>
+      <span class="fig-src">来源：作者按 R = 40 mΩ、Lq = 55 µH、7 对极、ψf = 10.5 mWb 计算，含负 id 弱磁，忽略磁饱和与铁损。</span>
+    </figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 3.1 驱动器上真正要看的六个数字</caption>
+      <thead>
+        <tr><th>指标</th><th>典型值</th><th>它约束了什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>母线电压</td><td>48 V（39–54.6 V）</td><td>高速段可用转矩；24 V 只够小关节，72 V 要重做绝缘</td></tr>
+        <tr><td>连续电流</td><td>20–40 A</td><td>连续力矩、铜箔厚度与风道</td></tr>
+        <tr><td>峰值电流</td><td>60–120 A，1–10 s</td><td>蹬地、跌倒恢复；由结温与母线纹波决定</td></tr>
+        <tr><td>开关频率</td><td>16–30 kHz</td><td>电流环带宽与开关损耗；低于 16 kHz 能听见啸叫</td></tr>
+        <tr><td>过流保护</td><td>&lt;100 µs</td><td>防退磁与炸管，必须走硬件比较器</td></tr>
+        <tr><td>欠压保护</td><td>40–42 V</td><td>防电芯过放与电流失控</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>把三个限界写成代码，就能回答「这个工作点行不行」。下面 25 行在电压圆与电流圆里扫描负 id，返回给定转速下允许的最大 q 轴电流；它假设磁路线性，所以是上界而不是实测值。</p>
+  <pre data-lang="python"><code><span class="tok-c"># 三条限界取交：电压圆 + 峰值电流 + 连续热限</span>
+<span class="tok-k">import</span> math
+
+R, Lq, psi, p, N = <span class="tok-n">0.040</span>, <span class="tok-n">55e-6</span>, <span class="tok-n">0.0105</span>, <span class="tok-n">7</span>, <span class="tok-n">9</span>   <span class="tok-c"># 电机与减速器（SI）</span>
+VDC, I_PEAK, I_CONT = <span class="tok-n">48.0</span>, <span class="tok-n">120.0</span>, <span class="tok-n">35.0</span>      <span class="tok-c"># 母线、峰值、连续</span>
+KT = <span class="tok-n">1.5</span> * p * psi                             <span class="tok-c"># N·m/A</span>
+
+<span class="tok-k">def</span> <span class="tok-f">iq_max</span>(omega, vdc=VDC, imax=I_PEAK, steps=<span class="tok-n">240</span>):
+    <span class="tok-s">"""电压圆与电流圆求交，允许负 id 弱磁，返回最大 iq"""</span>
+    we, V = p * N * omega, vdc / math.<span class="tok-f">sqrt</span>(<span class="tok-n">3</span>)  <span class="tok-c"># 电角速度、相电压上限</span>
+    A = R * R + (we * Lq) ** <span class="tok-n">2</span>
+    B = <span class="tok-n">2</span> * R * we * psi              <span class="tok-c"># id 在 iq 的一次项里恰好消掉</span>
+    best = <span class="tok-n">0.0</span>
+    <span class="tok-k">for</span> k <span class="tok-k">in</span> <span class="tok-f">range</span>(steps + <span class="tok-n">1</span>):
+        idc = -imax * k / steps            <span class="tok-c"># 从 0 扫到 -imax</span>
+        C = (R * idc) ** <span class="tok-n">2</span> + (we * Lq * idc + we * psi) ** <span class="tok-n">2</span> - V * V
+        disc = B * B - <span class="tok-n">4</span> * A * C
+        <span class="tok-k">if</span> disc &gt;= <span class="tok-n">0</span>:
+            iq = (-B + math.<span class="tok-f">sqrt</span>(disc)) / (<span class="tok-n">2</span> * A)
+            best = <span class="tok-f">max</span>(best, <span class="tok-f">min</span>(iq, math.<span class="tok-f">sqrt</span>(imax**<span class="tok-n">2</span> - idc**<span class="tok-n">2</span>)))
+    <span class="tok-k">return</span> KT * best * N                  <span class="tok-c"># 折算到关节侧</span>
+
+<span class="tok-k">for</span> tag, tau, v <span class="tok-k">in</span> ((<span class="tok-s">"行走 1.2 m/s"</span>, <span class="tok-n">40</span>, <span class="tok-n">1.2</span>), (<span class="tok-s">"快跑 3.3 m/s"</span>, <span class="tok-n">95</span>, <span class="tok-n">3.3</span>)):
+    w = v / <span class="tok-n">0.35</span>                            <span class="tok-c"># 腿长 0.35 m 折算关节角速度</span>
+    peak, cont = <span class="tok-f">iq_max</span>(w), <span class="tok-f">iq_max</span>(w, imax=I_CONT)
+    state = <span class="tok-s">"可持续"</span> <span class="tok-k">if</span> tau &lt;= cont <span class="tok-k">else</span> (<span class="tok-s">"仅峰值"</span> <span class="tok-k">if</span> tau &lt;= peak <span class="tok-k">else</span> <span class="tok-s">"越界"</span>)
+    <span class="tok-f">print</span>(<span class="tok-s">f"{tag}: w={w:.1f} rad/s 峰值 {peak:.0f} 连续 {cont:.0f} -&gt; {state}"</span>)
+<span class="tok-f">print</span>(<span class="tok-s">f"H1 膝 360 N·m @ 9.4 rad/s 峰值 {iq_max(9.4):.0f} -&gt; 越界约 3 倍"</span>)</code></pre>
+
+  <p>这台示例按 35 kg 级整机、行走时膝关节峰值需求 40 N·m 计（不是第 02 章那台 60 kg 参考机体——那里的 88 N·m 是单腿静态值，两者不是同一台机器）。输出是：行走 1.2 m/s 时峰值 119、连续 35 N·m——119 = 0.11 N·m/A × 120 A × 9，35 = 0.11 × 35 A × 9——需求 40 属于「仅峰值」；快跑 3.3 m/s 时需求 95，同样是「仅峰值」；H1 的 360 N·m 在这个包络上越界约 3 倍，所以它必须换更大的电机或更高的母线。第一条结论有点反直觉：走路时膝关节力矩就已经超过连续热限，靠的是占空比——每一步只有 30% 的时间在用力，热在剩下的 70% 里散掉。散热设计算的是均方根，不是峰值。</p>
+
+  <h2>传感链：精度不在编码器上</h2>
+  <p>这一节解决一个问题：编码器标着 19 bit，为什么末端还是差 2 mm。</p>
+  <p><strong>分辨率不等于精度。</strong>19 bit 是 524288 线，电机端一圈 360°，一格 0.00069°。经 10:1 减速器，关节端的分辨率是：</p>
+  <div class="formula-block">
+    <span class="formula">Δθ<sub>joint</sub> = 360° / (2<sup>N</sup> · G)</span>
+    <span class="formula-no">3.6</span>
+  </div>
+  <p>代入 N = 19、G = 10，得 <span class="formula-inline">6.9×10⁻⁵°</span>，在 0.4 m 的力臂上是 0.48 µm。这个数字比任何机械误差都小三个数量级以上。真正的误差来自别处：背隙（谐波 1–3 arcmin 即 0.017–0.05°，行星 3–10 arcmin）、连杆与减速器的柔度（关节刚度 <span class="formula-inline">1×10⁴ N·m/rad</span>，60 N·m 下变形 0.006 rad = 0.34°）、标定与装配（0.2°）、热漂。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="ch03-fig3-title ch03-fig3-desc">
+<title id="ch03-fig3-title">末端精度误差瀑布</title>
+<desc id="ch03-fig3-desc">五根柱状，纵轴为等效到 0.4 米外的末端误差，单位毫米，对数刻度从 0.0001 到 4。编码器量化 0.00048 毫米、背隙 0.35 毫米、柔度 2.4 毫米、标定 1.4 毫米、热漂 0.12 毫米。</desc>
+<line x1="78" y1="46" x2="78" y2="236" class="grid"/>
+<text x="70" y="240" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">10⁻⁴</text>
+<line x1="184.91" y1="46" x2="184.91" y2="236" class="grid"/>
+<text x="70" y="198.71" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">10⁻³</text>
+<line x1="291.82" y1="46" x2="291.82" y2="236" class="grid"/>
+<text x="70" y="157.43" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">10⁻²</text>
+<line x1="398.73" y1="46" x2="398.73" y2="236" class="grid"/>
+<text x="70" y="116.14" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">10⁻¹</text>
+<line x1="505.63" y1="46" x2="505.63" y2="236" class="grid"/>
+<text x="70" y="74.86" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">1</text>
+<line x1="78" y1="236" x2="570" y2="236" class="axis"/>
+<line x1="78" y1="70.86" x2="570" y2="70.86" style="stroke:var(--d4);stroke-width:1;stroke-dasharray:5 4"/>
+<text x="84" y="62.86" class="t-mono" font-size="12" style="fill:var(--d4)">1 mm　装配级公差</text>
+<rect x="98.2" y="207.87" width="58" height="28.13" style="fill:var(--d1)"/>
+<text x="127.2" y="200.87" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--ink-2)">4.8×10⁻⁴</text>
+<text x="127.2" y="256" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">编码器量化</text>
+<text x="127.2" y="273" text-anchor="middle" font-size="12" style="fill:var(--muted-ink)">19 bit，G=10</text>
+<rect x="196.6" y="89.68" width="58" height="146.32" style="fill:var(--d1)"/>
+<text x="225.6" y="82.68" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--ink-2)">0.35</text>
+<text x="225.6" y="256" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">背隙</text>
+<text x="225.6" y="273" text-anchor="middle" font-size="12" style="fill:var(--muted-ink)">0.05°</text>
+<rect x="295" y="55.16" width="58" height="180.84" style="fill:var(--d1)"/>
+<text x="324" y="48.16" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--ink-2)">2.4</text>
+<text x="324" y="256" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">柔度</text>
+<text x="324" y="273" text-anchor="middle" font-size="12" style="fill:var(--muted-ink)">60 N·m 负载</text>
+<rect x="393.4" y="64.82" width="58" height="171.18" style="fill:var(--d1)"/>
+<text x="422.4" y="57.82" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--ink-2)">1.4</text>
+<text x="422.4" y="256" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">标定</text>
+<text x="422.4" y="273" text-anchor="middle" font-size="12" style="fill:var(--muted-ink)">0.2°</text>
+<rect x="491.8" y="108.87" width="58" height="127.13" style="fill:var(--d1)"/>
+<text x="520.8" y="101.87" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--ink-2)">0.12</text>
+<text x="520.8" y="256" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">热漂</text>
+<text x="520.8" y="273" text-anchor="middle" font-size="12" style="fill:var(--muted-ink)">ΔT = 10 K</text>
+<text x="566" y="32" text-anchor="end" font-size="12.5" style="fill:var(--accent-2-ink)">编码器与柔度相差 3.7 个量级</text>
+<text x="24" y="141" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--ink-2)" transform="rotate(-90 24 141)">等效末端误差 / mm</text>
+</svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 3.3</span>0.4 m 力臂上的末端误差瀑布：编码器量化、背隙、柔度、标定与热漂的等效值，对数刻度，单位 mm。
+      <span class="fig-note read-for">读者应看出：19 bit 编码器折算到末端只有 0.0005 mm，柔度是 2.4 mm，两者差 3.7 个量级；换 21 bit 编码器不会让末端更准，把关节刚度提一倍才会。</span>
+      <span class="fig-src">来源：作者按 19 bit、10:1、关节刚度 1×10⁴ N·m/rad、60 N·m 负载计算，量级示意。</span>
+    </figcaption>
+  </figure>
+
+  <p>结论很直接：想让末端进 1 mm，先解决柔度和标定，再谈编码器。双编码器（电机端加关节端）能同时消掉背隙并测出传动件的扭转变形，是目前高端关节的标配，代价是多一路编码器和一根穿轴线。反过来，如果只装电机端编码器，减速器的背隙就只能靠标定表和负载模型猜。</p>
+
+  <p><strong>IMU 的误差分三类，常被混着说。</strong>惯性测量单元（Inertial Measurement Unit, IMU）的零偏（bias）是静止时的常数误差，±1 °/s 的量级；噪声密度是白噪声，0.014 °/s/√Hz，100 Hz 带宽下积分成 0.14 °/s 的均方根；温漂是零偏随温度的变化，0.01–0.05 °/s/K。零偏 1 °/s 积分 60 s 就是 60° 的姿态误差，所以 IMU 只能管 10 ms 级的姿态变化，长时间必须靠足底接触与视觉修正（第 08 章）。开机 10 分钟内的温漂比噪声大一个量级，每次上电都要重新标定零偏。</p>
+
+  <p><strong>关节力矩有三条路。</strong>最便宜的是用电流估力矩：<span class="formula-inline">τ = K<sub>t</sub>·i<sub>q</sub></span>，不需要任何额外传感器，精度 5–10%，误差来自 Kt 温漂和减速器摩擦。应变片贴在关节输出或谐波柔轮上，全桥输出 1–2 mV/V，配 24 bit ADC 能做到 0.1% 满量程，约 0.1 N·m。串联弹性执行器（Series Elastic Actuator, SEA）在电机和负载之间串一根弹簧，用编码器测弹簧变形算力矩，抗冲击最好，但弹簧谐振把力控带宽压到 20–50 Hz。选型判据：要带宽和背驱（腿）用电流估计或应变片，要力控精度和抗冲击（协作臂、脚踝）用 SEA。</p>
+
+  <p><strong>足底六维力是接触状态最可靠的一路。</strong>它装在脚踝和手腕，量程 ±145&nbsp;N / ±5&nbsp;N·m、分辨率 1/16&nbsp;N·m（ATI Mini45 一级，力矩通道）。它给出力与力矩，压力中心（Center of Pressure, CoP）由 <span class="formula-inline">p = M/F</span> 算出：Fz = 400 N 时，1/16&nbsp;N·m 的力矩分辨率对应 0.0625 / 400 = 0.16 mm 的 CoP 分辨率，比编码器推出来的关节位置还细。它比用正向运动学推出来的位置更可信，也是第 08 章零速修正的输入。</p>
+  <p>视觉（RGB-D，30–90 fps，1 m 处深度噪声 1–2 cm）负责「在哪、抓什么」；事件相机用 µs 级延迟和 120 dB 动态范围补高速运动；触觉阵列（1–5 mm 空间分辨率、0.1–1 N）负责滑移检测。它们都不进 1 kHz 环。</p>
+
+  <div class="table-wrap">
+    <table>
+      <caption>表 3.2 传感链上每一路的规格与它真正折算成什么</caption>
+      <thead>
+        <tr><th>传感器</th><th>典型规格</th><th>折算成什么</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>电机编码器</td><td>17–19 bit</td><td>关节分辨率 6.9×10⁻⁵°（19 bit，10:1）</td></tr>
+        <tr><td>IMU</td><td>±1 °/s，0.014 °/s/√Hz</td><td>积分 60 s 漂 60°，只能管 10 ms</td></tr>
+        <tr><td>关节力矩（应变片）</td><td>1–2 mV/V，24 bit</td><td>0.1% 满量程，约 0.1 N·m</td></tr>
+        <tr><td>足底六维力</td><td>±145&nbsp;N / ±5&nbsp;N·m</td><td>CoP 分辨率 0.16 mm（Fz = 400 N）</td></tr>
+        <tr><td>RGB-D</td><td>30–90 fps，±1–2 cm</td><td>抓取定位，不进 1 kHz 环</td></tr>
+        <tr><td>触觉阵列</td><td>1–5 mm，0.1–1 N</td><td>滑移检测与抓握力闭环</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>电源：为什么是 48 V</h2>
+  <p>这一节解决一个问题：为什么几乎所有电动人形都选 48 V，以及一块 720 Wh 的电池能撑多久。</p>
+  <p><strong>48 V 买的是电流。</strong><span class="formula-inline">P = VI</span>，同样 2 kW，48 V 要 42 A，24 V 要 83 A。线损按 <span class="formula-inline">I²R</span> 走：4 mm² 铜线每米 4.3 mΩ，走 3 m（来回 6 m），42 A 时 45 W，83 A 时 176 W。24 V 系统光在线束上就多烧 130 W，还要多背两公斤铜。这是 48 V 成为事实标准的第一个原因；第二个是它刚好卡在 SELV 边界内，第三个是 3.7 V 的电芯正好整除：13 串就是 48 V，不需要任何非标串数。</p>
+  <p>代价是安全边界。48 V 标称听起来温和，满电 54.6 V 已经贴着 SELV 的 60 V 上限；16 串的 H1 满电 67.2 V 直接越界。母线电容 1000 µF 储 1.5 J，足够把掉在端子上的扳手烧出坑。</p>
+
+  <p><strong>串数与容量决定能跑多久。</strong>13 串是最常见的配置。电芯用 21700（4.8 Ah），3 并就是 14.4 Ah × 48 V ≈ 690 Wh；H1 的 0.864 kWh / 15 Ah 是同一量级。容量不是越大越好：电池占整机质量 15–25%，多带 1 kWh 就多 5 kg，腿的力矩预算立刻变紧。续航粗算把机械功率除以链效率，再加上电子功耗：</p>
+  <div class="formula-block">
+    <span class="formula">P ≈ CoT·m·g·v / η + P<sub>elec</sub><span class="op">，</span>t = E / P</span>
+    <span class="formula-no">3.7</span>
+  </div>
+  <p><span class="formula-inline">CoT</span> 是第 01 章定义的运输代价：单位质量单位距离消耗的无量纲能量。人的步行 CoT 约 0.2，人形机器人 0.5–1.0；取 CoT = 1 就退化成 <span class="formula-inline">m·g·v/η</span>，那是「一直在爬坡」的上界，会把续航估低一半。算例：60 kg、1.2 m/s、CoT = 0.6，机械功率 424 W；除以 0.59 得 719 W；加 80 W 电子功耗，约 800 W。720 Wh 撑 54 分钟。站着不动只有 150 W（保持力矩加计算），能撑 4.8 小时。续航对任务剖面的敏感度是 5 倍，所以「续航两小时」这种说法必须带速度与负载才有意义。</p>
+
+  <p><strong>BMS 管三件事</strong>：单体电压 3.0–4.2 V、被动均衡 50 mA 级、总电流 100 A 级。它也是整机唯一一块「必须一直活着」的板子——BMS 挂了、接触器不断开，电池就会被过放到 0 V，那组电芯直接报废。</p>
+  <p>预充：母线电容 1000 µF，直接合闸时浪涌只受线路电感与等效串联电阻限制，峰值可达 10²–10³ A，接触器触点会粘连。串一个 50 Ω 电阻，时间常数 <span class="formula-inline">τ = RC = 50 ms</span>，5τ = 250 ms 充到 99%，浪涌被压到 1.1 A。所以上电顺序永远是：预充 → 检测母线电压超过 90% → 旁路接触器闭合 → 断开预充。</p>
+  <p>泄放：急停或下电后，母线电容上的 1.5 J 必须放掉。泄放电阻按 τ = 10 ms 设计，30 ms 内降到 12 V 以下。它同时兼作回馈泄放，功率按峰值回馈算——一条腿 25 J 在 0.1 s 内释放就是 250 W 量级。</p>
+
+  <figure class="figure fig-wide" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 330" role="img" aria-labelledby="ch03-fig4-title ch03-fig4-desc">
+<title id="ch03-fig4-title">48 V 电源树单线图</title>
+<desc id="ch03-fig4-desc">电池 13 串经 80 安熔断器、BMS、50 欧预充与旁路接触器接到 48 V 母线，母线经 1000 微法电容后分出六路关节驱动、一路 Orin 供电与一路 12 伏与 5 伏传感器供电；母线上方是泄放电阻，下方是双回路急停，急停切断接触器与栅极驱动。</desc>
+<defs><marker id="ch03-fig4-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d2)"/></marker></defs>
+<rect x="10" y="92" width="96" height="72" rx="2" style="fill:var(--paper-2);stroke:var(--line-2);stroke-width:1"/>
+<text x="58" y="109" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">电池 13S</text>
+<text x="58" y="125" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">54.6 / 39 V</text>
+<text x="58" y="140" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">0.72 kWh</text>
+<rect x="126" y="100" width="84" height="58" rx="2" style="fill:var(--paper-2);stroke:var(--line-2);stroke-width:1"/>
+<text x="168" y="117" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">BMS</text>
+<text x="168" y="133" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">100 A 限流</text>
+<text x="168" y="148" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">3.0 V 欠压</text>
+<rect x="230" y="100" width="94" height="58" rx="2" style="fill:var(--paper-2);stroke:var(--line-2);stroke-width:1"/>
+<text x="277" y="117" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">预充 50 Ω</text>
+<text x="277" y="133" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">旁路接触器</text>
+<text x="277" y="148" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">τ = 50 ms</text>
+<line x1="106" y1="128" x2="126" y2="128" style="stroke:var(--d2);stroke-width:1.3" marker-end="url(#ch03-fig4-arrow)"/>
+<line x1="210" y1="128" x2="230" y2="128" style="stroke:var(--d2);stroke-width:1.3" marker-end="url(#ch03-fig4-arrow)"/>
+<line x1="324" y1="128" x2="352" y2="128" style="stroke:var(--d2);stroke-width:1.3"/>
+<text x="116" y="182" text-anchor="middle" font-size="12" style="fill:var(--muted-ink)">80 A 熔断</text>
+<line x1="352" y1="60" x2="352" y2="250" style="stroke:var(--d1);stroke-width:2.5"/>
+<circle cx="352" cy="128" r="3.2" style="fill:var(--d1)"/>
+<text x="347" y="204" text-anchor="end" class="t-mono" font-size="12" style="fill:var(--muted-ink)">1000 µF</text>
+<text x="352" y="272" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--d1)">48 V 母线</text>
+<rect x="300" y="8" width="104" height="40" rx="2" style="fill:var(--paper-2);stroke:var(--line-2);stroke-width:1"/>
+<text x="352" y="25" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">泄放电阻</text>
+<text x="352" y="41" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">回馈 25 J → 1 s</text>
+<line x1="352" y1="60" x2="352" y2="48" style="stroke:var(--d2);stroke-width:1.3" stroke-dasharray="4 3" marker-end="url(#ch03-fig4-arrow)"/>
+<text x="366" y="70" font-size="12" style="fill:var(--accent-2-ink)">回馈通路</text>
+<rect x="376" y="82" width="104" height="44" rx="2" style="fill:var(--paper-2);stroke:var(--line-2);stroke-width:1"/>
+<text x="428" y="99" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">关节驱动 ×6</text>
+<text x="428" y="115" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">40 A 连续</text>
+<rect x="500" y="82" width="92" height="44" rx="2" style="fill:var(--paper-2);stroke:var(--line-2);stroke-width:1"/>
+<text x="546" y="99" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">关节电机</text>
+<text x="546" y="115" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">9:1 行星</text>
+<line x1="352" y1="100" x2="376" y2="100" style="stroke:var(--d2);stroke-width:1.3" marker-end="url(#ch03-fig4-arrow)"/>
+<line x1="480" y1="104" x2="500" y2="104" style="stroke:var(--d2);stroke-width:1.3" marker-end="url(#ch03-fig4-arrow)"/>
+<rect x="376" y="150" width="104" height="44" rx="2" style="fill:var(--paper-2);stroke:var(--line-2);stroke-width:1"/>
+<text x="428" y="167" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">Orin DC/DC</text>
+<text x="428" y="183" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">19 V · 40 W</text>
+<line x1="352" y1="172" x2="376" y2="172" style="stroke:var(--d2);stroke-width:1.3" marker-end="url(#ch03-fig4-arrow)"/>
+<rect x="376" y="218" width="104" height="44" rx="2" style="fill:var(--paper-2);stroke:var(--line-2);stroke-width:1"/>
+<text x="428" y="235" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">12 V / 5 V</text>
+<text x="428" y="251" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">编码 · IMU</text>
+<line x1="352" y1="240" x2="376" y2="240" style="stroke:var(--d2);stroke-width:1.3" marker-end="url(#ch03-fig4-arrow)"/>
+<rect x="96" y="286" width="232" height="40" rx="2" style="fill:var(--surface);stroke:var(--line-2);stroke-width:1;stroke-dasharray:4 3"/>
+<text x="212" y="303" text-anchor="middle" font-size="12.5" style="fill:var(--ink)">急停双回路 24 V</text>
+<text x="212" y="319" text-anchor="middle" class="t-mono" font-size="12" style="fill:var(--muted-ink)">断接触器 + 栅极 STO</text>
+<line x1="277" y1="286" x2="277" y2="162" style="stroke:var(--d2);stroke-width:1.2;stroke-dasharray:4 3" marker-end="url(#ch03-fig4-arrow)"/>
+</svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 3.4</span>48 V 电源树单线图：电池、BMS、预充、母线、三路负载，以及泄放与急停两条必须画出来的支路。
+      <span class="fig-note read-for">读者应看出：预充与泄放都不在「电池流向电机」的主路径上，但缺任何一个，第一次上电会焊死接触器、第一次急停会炸电容；急停同时切接触器与栅极，而不是只关软件。</span>
+      <span class="fig-src">来源：作者绘制，数值为 60 kg 级人形的典型配置。</span>
+    </figcaption>
+  </figure>
+
+  <aside class="callout callout--warning" data-reveal>
+    <p class="callout-kicker">警告 <span>Warning</span></p>
+    <p>48 V 不是安全电压。16 串满电 67.2 V 已越过 SELV 的 60 V 边界，湿手接触两端就可能通过人体形成回路；更常见的事故是母线电容——泄放回路一旦失效，断电几分钟后仍有 50 V 以上残压，1.5 J 集中在接触点上足够焊出一小块熔痕，再引发一串短路。维修前先量母线，别信「已经关了」。</p>
+  </aside>
+
+  <h2>算力与总线：谁在什么时候说话</h2>
+  <p>这一节解决一个问题：为什么一台人形要同时装 MCU 和 SoC，30 个关节又怎么在 1 ms 内收到同一条指令。</p>
+  <p><strong>两个时间尺度，两种芯片。</strong>微控制器（Microcontroller Unit, MCU）跑硬实时。STM32H7 一级：480 MHz Cortex-M7、1 MB RAM、带 FPU 和硬件除法。一个 20 kHz 电流环（采样、Clarke/Park、PI、SVPWM）约 2–4 µs，单核能带 4–8 个关节；1 kHz 的关节环（位置、力矩、温度、保护）再占 20–30%。它不能跑 Linux——一次调度抖动 100 µs 就够毁掉电流环。</p>
+  <p>片上系统（System on Chip, SoC）跑感知与策略。Jetson Orin NX 117 TOPS 在 10–40 W，AGX Orin 275 TOPS 在 15–60 W。它跑 Linux，做 30–100 Hz 的视觉和 10–50 Hz 的策略网络。40 W 的芯片靠自然对流散不掉，得配风扇或热管——这是很多人形背部鼓一块的原因。两者的接口只有一条：SoC 把 <span class="formula-inline">(q<sub>d</sub>, τ<sub>ff</sub>, K<sub>p</sub>, K<sub>d</sub>)</span> 通过以太网或 CAN 发给 MCU，MCU 保证 1 ms 内执行。分层不是架构洁癖，是延迟预算逼出来的。</p>
+
+  <p><strong>总线要在 1 ms 内把指令送到 30 个关节。</strong>先看四种候选的硬指标，再看谁适合做整机同步。</p>
+
+  <div class="table-wrap">
+    <table class="table--bus">
+      <caption>表 3.3 四种总线的分工与代价</caption>
+      <colgroup>
+        <col style="width:12.5%">
+        <col style="width:16.5%">
+        <col style="width:15%">
+        <col style="width:26%">
+        <col style="width:30%">
+      </colgroup>
+      <thead>
+        <tr><th>总线</th><th>速率</th><th>同步精度</th><th>典型用途</th><th>代价</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>CAN FD</td><td>5–8 Mbit/s</td><td>10–100 µs</td><td>关节、电池、手柄</td><td>30 关节要 2–4 条总线</td></tr>
+        <tr><td>EtherCAT</td><td>100 Mbit/s</td><td>&lt;1 µs</td><td>整机 1 kHz 环</td><td>专用从站芯片，菊花链断一点掉一段</td></tr>
+        <tr><td>SPI</td><td>5–50 Mbit/s</td><td>随主时钟</td><td>编码器、板内器件</td><td>距离 &lt;0.3 m，无纠错</td></tr>
+        <tr><td>RS485</td><td>1–10 Mbit/s</td><td>无</td><td>调试口、旧传感器</td><td>半双工，点对多点要轮询</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>CAN FD 数据段 5 Mbit/s，一帧 64 B 连仲裁带 CRC 约 130–150 µs。30 个关节、每帧 8 B 状态加 8 B 指令，一条总线在 1 ms 内只能塞 6–7 帧，所以整机要么开 4–6 条 CAN，要么换 EtherCAT。EtherCAT 100 Mbit/s，一帧穿过所有从站，30 个关节的过程数据在 100 µs 内走完，分布式时钟（Distributed Clock, DC）把各节点的时间对齐到 1 µs 以内。代价是从站要专用芯片（ET1100、LAN9252），每条支路只能菊花链或环网，断一处整段掉线；CAN FD 便宜、能随便分支，但没有全局时钟，节点间抖动 10–100 µs，做不了多关节同步的力分配。</p>
+
+  <p><strong>线束与接地是最后一道，也是最容易翻车的一道。</strong>三相电机线是 dv/dt 5–10 kV/µs 的干扰源，编码器线是 mV 级的信号，两者必须分槽走、交叉处正交。屏蔽层单端接地（驱动端），双端接地会形成地环流，把编码器计数打飞。48 V 功率地与信号地星型单点汇合，接地电阻小于 0.1 Ω。线束占整机质量 5–8%，却是现场故障的第一大来源。</p>
+
+  <aside class="callout callout--field" data-reveal>
+    <p class="callout-kicker">工程经验 <span>Field Note</span></p>
+    <p>编码器偶发跳数、一加电流就报位置错误，九成不是固件 bug：电机线与编码器线绑在同一束，共模干扰直接进了差分对。把两束线分开 50 mm、编码器线换双绞屏蔽、屏蔽层只在驱动板一端接地，问题通常当场消失。先怀疑线束，再怀疑代码。</p>
+  </aside>
+
+  <h2>可靠性与安全：故障树上的四个断点</h2>
+  <p>这一节解决一个问题：控制器死了、总线断了、有人拍下急停，机器应该怎么失效。</p>
+  <p>安全的定义不是「不出故障」，而是「故障时后果可预测」。硬件上要回答四个问题。</p>
+  <p><strong>第一个问题是：谁发现控制器死了。</strong>独立看门狗由内部 RC 振荡器驱动，1 ms 内不喂就复位。但复位本身不解决问题——腿会因为失去力矩而自由下落。所以通信超时（2 ms 收不到指令）触发的动作是力矩斜坡归零并切入阻尼，而不是硬断。硬断只留给急停与安全转矩关断。</p>
+  <p><strong>第二个问题是：怎么切断能量。</strong>安全转矩关断（Safe Torque Off, STO）按 IEC 61800-5-2 实现：双通道切断栅极驱动，保留逻辑电，响应小于 10 ms。它和「断母线」的区别是，断母线后电容还有残压、电机可能反电动势回灌，重新上电还要重新预充；STO 只关功率级，恢复快，母线不失电。急停链是双回路 24 V，串联所有急停按钮、碰撞开关与无线急停接收器，任一断开就同时触发主接触器与 STO。单点故障不能导致失效：一个回路断线另一个还能动作，一个接触器粘连另一个还能断开。</p>
+  <p><strong>剩下两件是 EMC 与绝缘。</strong>电磁兼容（Electromagnetic Compatibility, EMC）按 IEC 61800-3 的 C2/C3 做：电机线加共模扼流，Y 电容漏电流小于 3.5 mA，30–230 MHz 段的辐射发射压在 IEC 61800-3 的 C2 限值以下。48 V 系统不需要加强绝缘，但电机绕组对壳要过 500 VDC 耐压，绝缘电阻大于 10 MΩ。故障树上有四个单点：BMS 主接触器、EtherCAT 主站、急停回路、单编码器。前三个要么冗余要么失效安全，第四个的解法是双编码器，或者约定「编码器失效即切阻尼」。把这张表画出来，比在代码里加一百个 if 有用。</p>
+
+  <h2>三个真实系统怎么做的</h2>
+  <p>这一节解决一个问题：把前面的数字放到真实机器上对照，看设计者在哪里做了不同的取舍。</p>
+  <p><strong>Unitree H1 用电压换速度。</strong>它的膝关节标称 360 N·m，按模组质量折算 189 N·m/kg，母线最高 67.2 V（16 串），电池 0.864 kWh。360 N·m 对一台 47 kg 级的机身是 7.7 N·m/kg 体重，这个比值决定了它能做多大的动态动作而不先让关节饱和。16 串不是随便选的：同样一台电机，母线从 48 V 提到 67.2 V，恒转矩区延长 40%，代价是整机失去 SELV 资格，绝缘、爬电距离、连接器都要重做。</p>
+  <p><strong>MIT Humanoid 换掉的是力矩传感器。</strong>它用 6:1 行星加减速，膝关节再加一级 2:1 皮带做到 12:1；髋用 U10 模块（33.6 N·m / 619 g），膝用 U12（68 N·m / 1.17 kg），经皮带放大到峰值 136 N·m（68 × 2），电源 60 V / 3 Ah。它不装关节力矩传感器，靠电流估力矩，靠低惯量腿吸收冲击。这是一条明确的技术路线：用带宽和背驱换掉传感器与弹性件，代价是力矩精度依赖 Kt 标定与摩擦模型，减速器背隙必须小。180 Wh 的电池只够几分钟剧烈运动，说明它是研究平台而不是产品。</p>
+  <p><strong>Optimus 换的是整机架构。</strong>特斯拉把 48 V 定为整机唯一的功率域，电池、关节与计算共用一条母线（公开演示）。这个决定省掉的是一级大功率 DC/DC：2 kW 下按 95% 效率算就是 100 W 的额外热源，还要多一套线束与保护。代价是所有外设都要按 48 V 重新设计，包括那些原本只做 12 V 的传感器。三条路线放在一起看，分歧不在电机，而在「用什么换什么」：H1 用电压换速度，MIT 用带宽换传感器，Optimus 用架构统一换热管理与线束。</p>
+
+  <section class="takeaways" data-takeaways aria-labelledby="ch03-takeaways">
+    <p class="kicker" id="ch03-takeaways">本章要点 <span>Takeaways</span></p>
+    <ol>
+      <li><strong>整链效率约 59%。</strong>要 100 W 机械功率，电池得掏 170 W，剩下 70 W 全是热；峰值与连续力矩差 2–4 倍，是热容与热阻的比值，不是厂家保守。</li>
+      <li><strong>FOC 的全部工作是把电流矢量钉在 q 轴上。</strong>20 kHz 开关只买到 1–2 kHz 电流环带宽，因为采样与计算延迟按 1.5 个开关周期收税；六步换相省下的电路，要用 13.4% 的转矩脉动来还。</li>
+      <li><strong>精度瓶颈不在编码器。</strong>19 bit 折算到末端只有 0.5 µm，背隙 0.35 mm、柔度 2.4 mm，差 3.7 个量级；先提刚度、先做标定。</li>
+      <li><strong>48 V 标称不等于安全。</strong>16 串满电 67.2 V 已越过 SELV 的 60 V，25 J 的回馈能把 1000 µF 母线顶到 228 V，所以预充、泄放、STO 是电路的一部分，不是附件。</li>
+    </ol>
+  </section>
+
+  <ol class="paper-list">
+    <li>
+      <span class="paper-idx">[01]</span>
+      <div>
+        <p class="paper-title">Design Principles for Energy-Efficient Legged Locomotion and Implementation on the MIT Cheetah Robot</p>
+        <p class="paper-meta">S. Seok 等 · IEEE/ASME T-Mech, 2015 · 高扭矩密度电机、再生驱动、低损耗传动、低腿惯量四条原则</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/TMECH.2014.2339013">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[02]</span>
+      <div>
+        <p class="paper-title">Proprioceptive Actuator Design in the MIT Cheetah</p>
+        <p class="paper-meta">P. Wensing 等 · IEEE T-RO, 2017 · 论证低减速比加电流力控的执行器，以及冲击与带宽的权衡</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/TRO.2016.2640183">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[03]</span>
+      <div>
+        <p class="paper-title">The MIT Humanoid Robot: Design, Motion Planning, and Control For Acrobatic Behaviors</p>
+        <p class="paper-meta">M. Chignoli 等 · 2021 · 把本体感知执行器做到人形，给出 33.6–136 N·m 关节与 60 V / 3 Ah 电源</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/2104.09025">arXiv ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[04]</span>
+      <div>
+        <p class="paper-title">Mini Cheetah: A Platform for Pushing the Limits of Dynamic Quadruped Control</p>
+        <p class="paper-meta">B. Katz 等 · ICRA, 2019 · 模块化背驱关节，9 kg 平台做到 2.45 m/s 与后空翻</p>
+      </div>
+      <a class="paper-link" href="https://doi.org/10.1109/ICRA.2019.8793865">DOI ↗</a>
+    </li>
+    <li>
+      <span class="paper-idx">[05]</span>
+      <div>
+        <p class="paper-title">An Open Torque-Controlled Modular Robot Architecture for Legged Locomotion Research</p>
+        <p class="paper-meta">F. Grimminger 等 · 2019 · 开源力矩控制关节与整机，含 F28069M + DRV8305 驱动与实时 CAN 接口</p>
+      </div>
+      <a class="paper-link" href="https://arxiv.org/abs/1910.00093">arXiv ↗</a>
+    </li>
+  </ol>
+
+  <p>想动手的话，从单电机开始最省时间：<a href="https://github.com/simplefoc/Arduino-FOC">SimpleFOC</a> 是最小的 Clarke/Park 与 SVPWM 实现，配一个云台电机就能把电流环跑起来；要 48 V、几十安，<a href="https://docs.odriverobotics.com/v/latest/hardware/s1-datasheet.html">ODrive S1</a> 与 <a href="https://mjbots.github.io/moteus/">moteus</a> 的固件与文档是最好的参考，前者偏大功率与外部编码器，后者偏紧凑与 15–30 kHz 控制环。整机级的参数可以对着 <a href="https://www.unitree.com/h1/">Unitree H1</a> 的公开规格与 <a href="https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/">Jetson Orin</a> 的功耗表校准，总线时序看 <a href="https://www.ethercat.org/en/technology.html">EtherCAT 技术页</a>。</p>
+
+  <a class="next-chapter" href="#ch-04">
+    <span class="next-kicker">下一章 · Next</span>
+    <span class="next-title">04｜嵌入式软件：1 kHz 的实时世界</span>
+    <span class="next-arrow" aria-hidden="true">→</span>
+  </a>
+
+  <style>
+    /* 本章专用：全部选择器以 #ch-03 开头 */
+    #ch-03 .chapter-head h2 { text-wrap: initial; }
+    #ch-03 .paper-meta { text-wrap: balance; }
+    #ch-03 .table--bus { table-layout: fixed; min-width: 600px; }
+    #ch-03 .table--bus th, #ch-03 .table--bus td { padding-left: 9px; padding-right: 9px; }
+    #ch-03 .foc-wrap {
+      display: grid; gap: 10px; width: 100%; max-width: 560px;
+    }
+    #ch-03 .foc-wrap canvas {
+      width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
+    }
+    #ch-03 canvas[data-part="phasor"] { height: 250px; }
+    #ch-03 canvas[data-part="wave"] { height: 118px; }
+    #ch-03 .demo-controls button {
+      padding: 6px 13px; border: 1px solid var(--line-2); border-radius: 2px;
+      background: var(--surface); font-size: 12px; letter-spacing: .04em; color: var(--ink-2);
+      cursor: pointer; transition: border-color .18s, color .18s;
+    }
+    #ch-03 .demo-controls button:hover { border-color: var(--accent); color: var(--accent); }
+    #ch-03 .demo-controls button[aria-pressed="true"] {
+      border-color: var(--accent); color: var(--accent); font-weight: 600;
+      box-shadow: inset 0 -2px 0 var(--accent);
+    }
+    #ch-03 .demo-controls button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+    #ch-03 .foc-step { display: none; }
+    #ch-03 .is-reduced .foc-step { display: inline-block; }
+    #ch-03 .foc-hint { font-size: 12px; color: var(--muted-ink); }
+    #ch-03 .foc-note {
+      margin: 0; padding: 12px 16px 14px; border-top: 1px solid var(--line);
+      font-size: 12.5px; line-height: 1.85; color: var(--muted-ink);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #ch-03 .foc-step { display: inline-block; }
+    }
+    @media (max-width: 560px) {
+      #ch-03 canvas[data-part="phasor"] { height: 220px; }
+      #ch-03 .demo-readout { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</section>
