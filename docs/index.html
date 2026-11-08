@@ -10,6 +10,378 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23F7F5F0'/%3E%3Cg fill='none' stroke='%230E5A52' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='16' cy='7.5' r='3.4'/%3E%3Cpath d='M16 11v9M11.5 14h9M16 20l-3.5 6M16 20l3.5 6'/%3E%3C/g%3E%3C/svg%3E">
 <style>
 /* ==========================================================================
+   ANIMATIONS · 动效系统
+   可复用的 keyframes 与动效组件类，用于原理演示与微动提升。
+   全局尊重 prefers-reduced-motion: reduce。
+   ========================================================================== */
+
+/* ---- 01 基础 keyframes -------- */
+
+/* 呼吸脉冲：阴影、光晕、强调标记 */
+@keyframes pulse-ring {
+  0%, 100% { opacity: 0.06; transform: scale(1); }
+  50% { opacity: 0.12; transform: scale(1.08); }
+}
+
+/* 光晕扩散（用于关节标记、信号点） */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.24; r: 2.4px; }
+  50% { opacity: 0.6; r: 3.2px; }
+}
+
+/* 刻度流动：地面标尺、时间轴 */
+@keyframes flow-marks {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 20; }
+}
+
+/* 扫掠弧线：用于摩擦锥、约束边界演示 */
+@keyframes sweep-arc {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* 曲线生长：用于轨迹、reward 曲线 */
+@keyframes curve-grow {
+  from { stroke-dasharray: 0 1000; }
+  to { stroke-dasharray: 1000 0; }
+}
+
+/* 时钟节拍：指针移动 */
+@keyframes tick-beat {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+
+/* 错位淡入：章节标题、卡片入场 */
+@keyframes fade-slide-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 质心往复（倒立摆） */
+@keyframes pendulum-sway {
+  0%, 100% { transform: translateX(-18px); }
+  50% { transform: translateX(18px); }
+}
+
+/* 支撑点巡回（ZMP 演示） */
+@keyframes zmp-patrol {
+  0%   { cx: 150; cy: 200; }
+  25%  { cx: 180; cy: 190; }
+  50%  { cx: 170; cy: 220; }
+  75%  { cx: 140; cy: 210; }
+  100% { cx: 150; cy: 200; }
+}
+
+/* 扫掠旋转（摩擦锥半径向量） */
+@keyframes cone-sweep {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ---- 02 动效组件类 -------- */
+
+/* 呼吸脉冲 */
+.anim-pulse {
+  animation: pulse-ring 2.6s ease-in-out infinite;
+}
+
+/* 关节脉冲（opacity 呼吸，比改 r 兼容性好） */
+@keyframes joint-breathe {
+  0%, 100% { opacity: 0.55; }
+  50%       { opacity: 1; }
+}
+.anim-glow {
+  animation: joint-breathe 2.4s ease-in-out infinite;
+}
+
+/* 流动刻度（SVG line，需设 stroke-dasharray） */
+.anim-flow {
+  stroke-dasharray: 4 16;
+  animation: flow-marks 1.8s linear infinite;
+}
+
+/* 曲线生长（SVG path，需计算 stroke 长度） */
+.anim-curve-grow {
+  animation: curve-grow 3s ease-out forwards;
+}
+
+/* 扫掠弧线 */
+.anim-sweep {
+  stroke-dasharray: 100 0;
+  animation: sweep-arc 3s ease-in-out infinite;
+}
+
+/* 质心往复 */
+.anim-pendulum {
+  animation: pendulum-sway 3s ease-in-out infinite;
+  transform-origin: center;
+}
+
+/* ZMP 巡回点 */
+.anim-zmp-patrol {
+  animation: zmp-patrol 4s ease-in-out infinite;
+}
+
+/* 摩擦锥扫掠 */
+.anim-cone-sweep {
+  animation: cone-sweep 4s linear infinite;
+  transform-origin: center;
+}
+
+/* 章节标题错位淡入：结合 [data-reveal] 与 .is-visible，避免页面加载时立即触发 */
+html.js .chapter-head[data-reveal]:not(.is-visible) .ch-num,
+html.js .chapter-head[data-reveal]:not(.is-visible) h2,
+html.js .chapter-head[data-reveal]:not(.is-visible) .kicker {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+html.js .chapter-head[data-reveal].is-visible .ch-num {
+  animation: fade-slide-up 0.7s var(--ease-out) 0s backwards;
+}
+
+html.js .chapter-head[data-reveal].is-visible h2 {
+  animation: fade-slide-up 0.7s var(--ease-out) 0.08s backwards;
+}
+
+html.js .chapter-head[data-reveal].is-visible .kicker {
+  animation: fade-slide-up 0.7s var(--ease-out) 0.04s backwards;
+}
+
+/* ---- 03 Hero 区增强动效 -------- */
+
+/* Hero 脚下阴影呼吸：只动 opacity，避免与 body-bob 的 transform 打架 */
+.hero-figure > svg > g > ellipse {
+  animation: shadow-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes shadow-breathe {
+  0%, 100% { opacity: 0.05; }
+  50%      { opacity: 0.11; }
+}
+
+/* Hero 地面刻度流动 */
+.hero-figure .ground-marks line {
+  stroke-dasharray: 2 18;
+  animation: flow-marks 2.4s linear infinite;
+}
+
+/* Hero 关节标记脉冲（错相位，只动 opacity；.joint-hl 仅存在于近侧关节） */
+.hero-figure .joint-hl {
+  animation: joint-breathe 2.6s ease-in-out infinite;
+}
+
+.hero-figure .j-knee-a .joint-hl { animation-delay: 0.3s; }
+.hero-figure .j-sh-a .joint-hl   { animation-delay: 0.6s; }
+
+/* ---- 04 章节专用动画（按需注入 class） -------- */
+
+/* 第 4 章时钟指针（旧占位，实际由 ch04-tick-pointer 实现） */
+#ch-04 .tick-pointer { animation: tick-beat 1s linear infinite; }
+
+/* 第 4 章 1 kHz 慢镜头指针扫掠 */
+@keyframes ch04-tick-sweep {
+  from { transform: translateX(0); }
+  to { transform: translateX(480px); }
+}
+
+#ch-04 .ch04-tick-pointer {
+  animation: ch04-tick-sweep 3s linear infinite;
+}
+
+/* 第 4 章阶段高亮：四段共用 3 s 周期，按指针位置（段宽占比）点亮
+   段边界 60/150/260/430/540 → 0% / 18.75% / 41.67% / 77.08% / 100% */
+@keyframes ch04-phase-1 {
+  0%, 18.2% { fill-opacity: 0.34; }
+  18.8%, 100% { fill-opacity: 0; }
+}
+
+@keyframes ch04-phase-2 {
+  0%, 18.7% { fill-opacity: 0; }
+  19.3%, 41.1% { fill-opacity: 0.34; }
+  41.7%, 100% { fill-opacity: 0; }
+}
+
+@keyframes ch04-phase-3 {
+  0%, 41.6% { fill-opacity: 0; }
+  42.2%, 76.5% { fill-opacity: 0.34; }
+  77.1%, 100% { fill-opacity: 0; }
+}
+
+@keyframes ch04-phase-4 {
+  0%, 77.0% { fill-opacity: 0; }
+  77.6%, 99.4% { fill-opacity: 0.34; }
+  100% { fill-opacity: 0; }
+}
+
+#ch-04 .ch04-phase-1 { animation: ch04-phase-1 3s linear infinite; }
+#ch-04 .ch04-phase-2 { animation: ch04-phase-2 3s linear infinite; }
+#ch-04 .ch04-phase-3 { animation: ch04-phase-3 3s linear infinite; }
+#ch-04 .ch04-phase-4 { animation: ch04-phase-4 3s linear infinite; }
+
+/* 第 7 章 reward 曲线生长（图 7.3b）
+   三条曲线依次生长，模拟训练收敛过程；dasharray 值取略大于实际路径长度 */
+@keyframes ch07-curve-grow {
+  from { stroke-dashoffset: 520; }
+  to   { stroke-dashoffset: 0; }
+}
+
+#ch-07 .ch07-curve-1,
+#ch-07 .ch07-curve-2,
+#ch-07 .ch07-curve-3 {
+  stroke-dasharray: 520;
+  stroke-dashoffset: 520;
+  animation: ch07-curve-grow 2.6s var(--ease-out) forwards;
+}
+
+#ch-07 .ch07-curve-1 { animation-delay: 0s; }
+#ch-07 .ch07-curve-2 { animation-delay: 0.3s; }
+#ch-07 .ch07-curve-3 { animation-delay: 0.6s; }
+
+/* 训练光标闪烁 */
+@keyframes ch07-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.15; }
+}
+
+#ch-07 .ch07-cursor {
+  animation: ch07-cursor-blink 0.9s ease-in-out 3.4s infinite both;
+}
+
+/* 第 6 章 LIPM 往复动画 */
+#ch-06 .ch06-lipm-arm {
+  transform-box: view-box;
+  transform-origin: 300px 250px;
+  animation: ch06-lipm-sway 4s ease-in-out infinite;
+}
+
+@keyframes ch06-lipm-sway {
+  0%, 100% { transform: rotate(-4deg); }
+  50%      { transform: rotate(4deg); }
+}
+
+#ch-06 .ch06-lipm-proj {
+  animation: ch06-lipm-proj 4s ease-in-out infinite;
+}
+
+@keyframes ch06-lipm-proj {
+  0%, 100% { transform: translateX(-19px); }
+  50%      { transform: translateX(19px); }
+}
+
+#ch-06 .ch06-lipm-vel-r {
+  animation: ch06-lipm-vel-r 4s ease-in-out infinite;
+}
+
+#ch-06 .ch06-lipm-vel-l {
+  animation: ch06-lipm-vel-l 4s ease-in-out infinite;
+}
+
+@keyframes ch06-lipm-vel-r {
+  0%, 45%   { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
+@keyframes ch06-lipm-vel-l {
+  0%, 45%   { opacity: 0; }
+  55%, 100% { opacity: 1; }
+}
+
+/* ---- 05 响应 prefers-reduced-motion -------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  
+  /* 保留入场淡入，但移除位移 */
+  html.js [data-reveal] {
+    transform: none;
+  }
+  
+  .chapter-head .ch-num,
+  .chapter-head h2,
+  .chapter-head .kicker {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- 06 微动提升：图表悬停反馈 -------- */
+
+/* 图表内可交互元素悬停放大 */
+figure svg [data-interactive]:hover {
+  transform: scale(1.05);
+  transition: transform 0.2s var(--ease-out);
+}
+
+/* 演示控件焦点脉冲 */
+.demo-controls input[type="range"]:focus-visible,
+.demo-controls input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px rgba(14, 90, 82, 0.18);
+  transition: box-shadow 0.2s ease;
+}
+
+/* ---- 07 性能优化 -------- */
+
+/* 给需要动画的元素开 GPU 加速 */
+.anim-pulse,
+.anim-glow,
+.anim-pendulum,
+.anim-zmp-patrol,
+.anim-cone-sweep,
+.hero-figure ellipse {
+  will-change: transform, opacity;
+}
+
+/* 复杂路径动画用 transform 而非直接改坐标 */
+.anim-curve-grow,
+.anim-sweep {
+  will-change: stroke-dasharray, stroke-dashoffset;
+}
+
+/* ---- 第 5 章：COP 在支撑多边形内巡回 ---- */
+/* 支撑多边形 0.24 × 0.30 m 映射为 x 252→348、y 110→230 的用户单位，
+   COP 圆心在 (324,170)，各关键帧位移均落在凸包内（最小边界余量 8 单位）。 */
+@keyframes ch05-cop-patrol {
+  0%   { transform: translate(0, 0); }
+  22%  { transform: translate(-26px, -8px); }
+  45%  { transform: translate(-14px, 16px); }
+  68%  { transform: translate(10px, 12px); }
+  85%  { transform: translate(16px, -6px); }
+  100% { transform: translate(0, 0); }
+}
+#ch-05 .ch05-cop-point,
+#ch-05 .ch05-cop-trail {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ch05-cop-patrol 6s ease-in-out infinite;
+}
+
+/* 尾迹点略微滞后，模拟形态上的拖影 */
+#ch-05 .ch05-cop-trail {
+  animation-duration: 6s;
+  animation-delay: -0.35s;
+}
+
+@keyframes ch05-cop-hint-breathe {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+#ch-05 .ch05-cop-hint {
+  animation: ch05-cop-hint-breathe 3s ease-in-out infinite;
+}
+
+</style>
+<style>
+/* ==========================================================================
    人形机器人全栈手册 · 设计系统
    HUMANOID ROBOTICS — A FULL-STACK FIELD MANUAL
 
