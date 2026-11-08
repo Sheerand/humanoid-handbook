@@ -1,5 +1,5 @@
 <section class="chapter" id="ch-05" data-chapter="05">
-  <header class="chapter-head">
+  <header class="chapter-head" data-reveal>
     <div class="ch-meta">
       <span class="ch-num" aria-hidden="true">05</span>
       <p class="kicker">Dynamics &amp; Whole-Body Control</p>
@@ -280,8 +280,11 @@
         <circle cx="300" cy="170" r="5" style="fill:var(--ink)"/>
         <text x="292" y="162" font-size="12" text-anchor="end" style="fill:var(--ink)">c 投影</text>
 
-        <circle cx="324" cy="170" r="4.5" style="fill:var(--d2)"/>
+        <circle cx="324" cy="170" r="7.5" style="fill:var(--d2);fill-opacity:.16" class="ch05-cop-trail"/>
+        <circle cx="324" cy="170" r="4.5" style="fill:var(--d2)" class="ch05-cop-point"/>
         <text x="334" y="166" font-size="12" style="fill:var(--ink)">CoP</text>
+
+        <text x="580" y="52" font-size="12" text-anchor="end" class="t-label ch05-cop-hint">COP 在多边形内 → 力矩可解</text>
 
         <text x="300" y="96" font-size="12" text-anchor="middle" style="fill:var(--ink-2)">双支撑多边形 0.24 × 0.30 m</text>
         <text x="300" y="272" font-size="12" text-anchor="middle" style="fill:var(--muted-ink)">单支撑时缩到一只脚：0.24 × 0.10 m</text>
@@ -302,7 +305,7 @@
     </div>
     <figcaption>
       <span class="fig-no">图 5.3</span>俯视图下的支撑多边形与压力中心。质心投影在脚掌中心，CoP 前移 0.06 m 意味着整机正在以 0.65 m/s² 加速。
-      <span class="fig-note read-for">读者应看出：CoP 必须在多边形内，质心投影不必；两者的差值就是水平加速度。</span>
+      <span class="fig-note read-for">读者应看出：CoP 必须在多边形内，质心投影不必；两者的差值就是水平加速度。读它的时候盯住铜色点：它只要待在凸包内部，脚底的接触力就存在一组可行解；跑出凸包，方程无解，机器人就是摔。</span>
       <span class="fig-src">来源：作者绘制，尺寸取 0.24 m 脚长、0.20 m 站距，z<sub>c</sub> = 0.9 m。</span>
     </figcaption>
   </figure>

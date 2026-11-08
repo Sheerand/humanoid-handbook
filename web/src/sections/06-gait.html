@@ -1,5 +1,5 @@
 <section class="chapter" id="ch-06" data-chapter="06">
-  <header class="chapter-head">
+  <header class="chapter-head" data-reveal>
     <div class="ch-meta">
       <span class="ch-num" aria-hidden="true">06</span>
       <p class="kicker">Gait &amp; Model Predictive Control</p>
@@ -218,6 +218,100 @@
       <span class="fig-no">图 6.2</span>LIPM 的侧视几何：支点在支撑脚，质心高度恒为 0.80 m，水平偏移 0.25 m 产生 3.07 m/s² 的水平加速度，方向背离支撑点。
       <span class="fig-note read-for">读者应看出：模型的全部自由度只有 c 与 <span class="qdot">c</span> 两个，输入只有一个落点 p；腿的质量与关节被整体丢弃，换来的是可解析、可预测。</span>
       <span class="fig-src">来源：作者绘制，按 m = 60 kg、z<sub>c</sub> = 0.8 m 计算。</span>
+    </figcaption>
+  </figure>
+
+  <p>图 6.2b 把这个不稳定过程动起来：支撑点固定，质心沿摆杆绕支撑点缓慢摆动——倾角越大，质心偏移越大，而偏移正是 LIPM 方程里驱动加速度的那一项。速度箭头的方向提示「现在朝哪儿走」，地面投影点的左右漂移是位置状态 c 的直观映射。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+<svg viewBox="0 0 600 300" role="img" aria-labelledby="ch06-fig2b-title ch06-fig2b-desc">
+      <title id="ch06-fig2b-title">线性倒立摆往复摆动动画</title>
+      <desc id="ch06-fig2b-desc">侧视图：支撑点固定在画面中央地面，倒立摆杆绕支撑点做 ±4 度往复摆动，质心跟随杆端移动；地面投影圆点随质心水平位移左右漂移，速度箭头交替左右翻转，直观展示 LIPM 的两个状态与不稳定方向。</desc>
+      <defs>
+        <marker id="ch06-fig2b-arrow-r" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d1)"/>
+        </marker>
+        <marker id="ch06-fig2b-arrow-l" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d1)"/>
+        </marker>
+      </defs>
+
+      <!-- 地面水平线 y=250 -->
+      <line x1="80" y1="250" x2="520" y2="250" style="stroke:var(--ink-2);stroke-width:1.5"/>
+      <!-- 地面刻度 -->
+      <line x1="100" y1="250" x2="92" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="120" y1="250" x2="112" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="140" y1="250" x2="132" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="160" y1="250" x2="152" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="180" y1="250" x2="172" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="200" y1="250" x2="192" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="220" y1="250" x2="212" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="240" y1="250" x2="232" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="260" y1="250" x2="252" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="280" y1="250" x2="272" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="300" y1="250" x2="292" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="320" y1="250" x2="312" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="340" y1="250" x2="332" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="360" y1="250" x2="352" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="380" y1="250" x2="372" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="400" y1="250" x2="392" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="420" y1="250" x2="412" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="440" y1="250" x2="432" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="460" y1="250" x2="452" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="480" y1="250" x2="472" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="500" y1="250" x2="492" y2="259" style="stroke:var(--line-2);stroke-width:.8"/>
+
+      <!-- 竖直虚线 x=300（正上方基准） -->
+      <line x1="300" y1="50" x2="300" y2="250" style="stroke:var(--line-2);stroke-width:.8;stroke-dasharray:4 4"/>
+
+      <!-- 质心高度水平虚线 y=110 -->
+      <line x1="100" y1="110" x2="500" y2="110" style="stroke:var(--line-2);stroke-width:.8;stroke-dasharray:4 4"/>
+      <text x="104" y="106" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">质心高度基准</text>
+
+      <!-- 支撑点三角 -->
+      <polygon points="300,250 292,265 308,265" style="fill:var(--d2);fill-opacity:.7;stroke:var(--d2);stroke-width:1"/>
+      <text x="300" y="282" class="t-label" text-anchor="middle" style="font-size:12px;fill:var(--d2);">支撑点 p</text>
+
+      <!-- 可动组：摆杆 + 质心，绕支撑点 (300,250) 摆动 -->
+      <g class="ch06-lipm-arm">
+        <!-- 摆杆 -->
+        <line x1="300" y1="250" x2="300" y2="110" style="stroke:var(--accent);stroke-width:2.5"/>
+        <!-- 质心圆 -->
+        <circle cx="300" cy="110" r="10" style="fill:var(--d1);stroke:var(--paper);stroke-width:1.5"/>
+
+        <!-- 质心标注 -->
+        <text x="318" y="74" class="t-label" style="font-size:12px;fill:var(--accent);">质心 m</text>
+        <text x="318" y="89" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">l = 0.8 m</text>
+
+        <!-- 速度箭头：向右（0%→45% 可见，相位 0→2s） -->
+        <g class="ch06-lipm-vel-r">
+          <line x1="310" y1="110" x2="352" y2="110" marker-end="url(#ch06-fig2b-arrow-r)" style="stroke:var(--d1);stroke-width:1.5"/>
+        </g>
+        <!-- 速度箭头：向左（55%→100% 可见，相位 2→4s） -->
+        <g class="ch06-lipm-vel-l">
+          <line x1="290" y1="110" x2="248" y2="110" marker-end="url(#ch06-fig2b-arrow-l)" style="stroke:var(--d1);stroke-width:1.5"/>
+        </g>
+        <g class="ch06-lipm-vel-l">
+          <line x1="290" y1="110" x2="252" y2="110" marker-end="url(#ch06-fig2b-arrow-l)" style="stroke:var(--d1);stroke-width:1.5"/>
+        </g>
+      </g>
+
+      <!-- 地面投影点（独立动画，跟随质心水平分量左右移动） -->
+      <circle class="ch06-lipm-proj" cx="300" cy="265" r="4" style="fill:var(--d2);fill-opacity:.85"/>
+      <text x="300" y="244" class="t-label" text-anchor="middle" style="font-size:11px;fill:var(--muted-ink);">质心投影</text>
+
+      <!-- 高度尺寸标注 -->
+      <line x1="530" y1="250" x2="530" y2="110" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="525" y1="250" x2="535" y2="250" style="stroke:var(--line-2);stroke-width:.8"/>
+      <line x1="525" y1="110" x2="535" y2="110" style="stroke:var(--line-2);stroke-width:.8"/>
+      <text x="538" y="186" class="t-mono" style="font-size:12px;fill:var(--muted-ink);">z<tspan font-size="9" dy="3">c</tspan><tspan dy="-3"> = 0.8 m</tspan></text>
+    </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 6.2b</span>线性倒立摆往复：支撑点固定，质心随摆杆绕支撑点 ±4° 摆动，速度箭头交替指向运动方向，地面投影圆点随质心水平分量漂移。
+      <span class="fig-note read-for">读它的时候看两件事：质心偏离支撑点越多，杆的倾角越大；而杆一旦开始倒，速度方向会让偏移指数放大——这就是为什么必须在偏移还小的时候决定下一步落在哪。</span>
+      <span class="fig-src">来源：作者绘制，CSS 动画示意，非精确轨迹仿真。</span>
     </figcaption>
   </figure>
 

@@ -34,7 +34,7 @@
     }
   </style>
 
-  <header class="chapter-head">
+  <header class="chapter-head" data-reveal>
     <div class="ch-meta">
       <span class="ch-num" aria-hidden="true">04</span>
       <p class="kicker">Real-Time Embedded</p>
@@ -375,6 +375,67 @@
   <h2>1 kHz 循环长什么样</h2>
 
   <p>这一节解决一个问题：把上面的约束写成一段能编译、能验收的循环。</p>
+
+  <figure class="figure" data-reveal>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 600 220" role="img" aria-labelledby="ch04-fig4b-title ch04-fig4b-desc">
+        <title id="ch04-fig4b-title">1 kHz 控制周期的慢镜头</title>
+        <desc id="ch04-fig4b-desc">1 毫秒控制周期分为四个阶段：读取传感 0.15 ms、状态估计 0.25 ms、QP 求解 0.45 ms、写力矩 0.15 ms。一条竖直指针从左到右扫过时间轴，依次点亮每个阶段。</desc>
+        <defs>
+          <marker id="ch04-fig4b-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 Z" style="fill:var(--d2)"/>
+          </marker>
+        </defs>
+        <g font-size="12">
+          <!-- 时间轴 -->
+          <line x1="60" y1="150" x2="540" y2="150" stroke="var(--line-2)" stroke-width="1.5" marker-end="url(#ch04-fig4b-arrow)"/>
+          <text x="60" y="172" text-anchor="middle" style="fill:var(--muted-ink)">0</text>
+          <text x="540" y="172" text-anchor="end" style="fill:var(--muted-ink)">1 ms 截止期</text>
+
+          <!-- 四个阶段矩形块 -->
+          <g style="stroke:var(--line-2)" stroke-width="1">
+            <rect x="60" y="100" width="90" height="34" rx="2" style="fill:var(--d1)" fill-opacity="0.12"/>
+            <rect x="150" y="100" width="110" height="34" rx="2" style="fill:var(--d2)" fill-opacity="0.12"/>
+            <rect x="260" y="100" width="170" height="34" rx="2" style="fill:var(--d3)" fill-opacity="0.12"/>
+            <rect x="430" y="100" width="110" height="34" rx="2" style="fill:var(--d4)" fill-opacity="0.12"/>
+          </g>
+
+          <!-- 高亮覆盖层（动画） -->
+          <rect x="60" y="100" width="90" height="34" rx="2" style="fill:var(--d1)" fill-opacity="0" class="ch04-phase-hl ch04-phase-1"/>
+          <rect x="150" y="100" width="110" height="34" rx="2" style="fill:var(--d2)" fill-opacity="0" class="ch04-phase-hl ch04-phase-2"/>
+          <rect x="260" y="100" width="170" height="34" rx="2" style="fill:var(--d3)" fill-opacity="0" class="ch04-phase-hl ch04-phase-3"/>
+          <rect x="430" y="100" width="110" height="34" rx="2" style="fill:var(--d4)" fill-opacity="0" class="ch04-phase-hl ch04-phase-4"/>
+
+          <!-- 阶段标签 -->
+          <g text-anchor="middle" style="fill:var(--ink)">
+            <text x="105" y="121" class="t-label">读取传感</text>
+            <text x="205" y="121" class="t-label">状态估计</text>
+            <text x="345" y="121" class="t-label">QP 求解</text>
+            <text x="485" y="121" class="t-label">写力矩</text>
+          </g>
+
+          <!-- 耗时标注 -->
+          <g text-anchor="middle" style="fill:var(--muted-ink)">
+            <text x="105" y="76">0.15 ms</text>
+            <text x="205" y="76">0.25 ms</text>
+            <text x="345" y="76">0.45 ms</text>
+            <text x="485" y="76">0.15 ms</text>
+          </g>
+
+          <!-- 播放指针（动画） -->
+          <g class="ch04-tick-pointer">
+            <line x1="60" y1="88" x2="60" y2="162" stroke="var(--d5)" stroke-width="2"/>
+            <path d="M60 88 L55 80 L65 80 Z" style="fill:var(--d5)"/>
+          </g>
+        </g>
+      </svg>
+    </div>
+    <figcaption>
+      <span class="fig-no">图 4.4b</span>1 kHz 控制周期的慢镜头：一条竖直指针从 0 扫到 1 ms，依次点亮四个阶段，展示每段的时间预算与顺序。
+      <span class="fig-note read-for">读者应看出：1 毫秒内四段串行执行，QP 求解占近一半时间，任何一段超时都会击穿截止期；指针匀速移动强调实时性——时间不等人。</span>
+      <span class="fig-src">来源：作者绘制，时间预算为典型值。</span>
+    </figcaption>
+  </figure>
 
   <p>五条规则，按重要性排序。一，单线程主循环加定时器触发，不用 <code>while(1)</code> 加 sleep——sleep 的唤醒误差就是抖动。二，每个阶段有预算，超预算记一次 miss 并继续，而不是阻塞等待。三，所有内存在启动时分配，运行期零 malloc。四，控制环只写环形缓冲，不读、不打日志、不碰文件。五，用状态机代替 if-else，每个转移都有可测量的触发条件和超时。</p>
 

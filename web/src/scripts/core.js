@@ -538,13 +538,37 @@
     watchMedia(wideQuery, function () { if (isWide() && isOpen()) closeDrawer(false); });
   }
 
+  /* ------------------------------------------------------------------------
+     图内一次性动画：进入视口时重播
+     曲线生长等 forwards 动画在元素进入视口 35% 时强制重启。
+     prefers-reduced-motion 下跳过。
+     ------------------------------------------------------------------------ */
+  function setupReplayAnimations() {
+    var nodes = all('[data-replay-on-view]');
+    if (!nodes.length) return;
+    if (!('IntersectionObserver' in window)) return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        var el = entry.target;
+        el.style.animation = 'none';
+        void el.getBoundingClientRect(); // 强制重排
+        el.style.animation = '';
+      });
+    }, { threshold: 0.35 });
+
+    nodes.forEach(function (el) { io.observe(el); });
+  }
+
   /* ---- 启动 ---- */
   function init() {
     if (!doc.body) return;
     chapters = all('section.chapter[id]');
     setupProgress(); setupToTop(); setupPromptWording(); setupNoBreak();
     setupReveal(); setupCode(); setupScrollHints(); setupReferenceTitles();
-    setupMiniToc(); setupChapters(); setupDrawer();
+    setupMiniToc(); setupChapters(); setupDrawer(); setupReplayAnimations();
     listen(window, 'scroll', schedule, { passive: true });
     listen(window, 'resize', schedule);
     schedule();
