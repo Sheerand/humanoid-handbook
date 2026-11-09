@@ -278,7 +278,73 @@ html.js .chapter-head[data-reveal].is-visible .kicker {
   55%, 100% { opacity: 1; }
 }
 
-/* ---- 05 响应 prefers-reduced-motion -------- */
+/* ---- 08 外壳自动隐藏：目录与顶栏让路 -------- */
+
+/* 桌面导航轨：向下阅读时滑出，向上滚 / 回到顶部 / 鼠标贴左边缘时回来。
+   用 transform 而不是 display，避免布局跳动（body 的 padding-left 保持不变）。 */
+@media (min-width: 1200px) {
+  .rail {
+    transition: transform .42s var(--ease), opacity .42s var(--ease);
+    will-change: transform;
+  }
+  .rail.is-auto-hidden {
+    transform: translateX(calc(-100% - 1px));
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* 目录收起时把左侧留白一并收掉，正文重新居中，把宽度还给内容 */
+  body {
+    transition: padding-left .42s var(--ease);
+  }
+  body.rail-off {
+    padding-left: 0;
+  }
+}
+
+/* 平板 / 手机顶栏：同理向上收起 */
+.masthead {
+  transition: transform .38s var(--ease), opacity .38s var(--ease);
+  will-change: transform;
+}
+
+.masthead.is-auto-hidden {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 左边缘热区由脚本切 .is-auto-hidden 实现，这里不需要额外规则。 */
+
+/* 目录收起后出现的贴边书签 */
+.rail-handle {
+  position: fixed; left: 0; top: 112px; z-index: 91; display: none;
+  align-items: center; justify-content: center;
+  width: 24px; height: 72px; padding: 0;
+  writing-mode: vertical-rl; text-orientation: upright;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .26em;
+  color: var(--muted-ink); background: var(--paper);
+  border: 1px solid var(--line); border-left: 0; border-radius: 0 2px 2px 0;
+  cursor: pointer; opacity: 0; transform: translateX(-10px); pointer-events: none;
+  transition: opacity .3s var(--ease), transform .3s var(--ease),
+              color .2s var(--ease), border-color .2s var(--ease);
+}
+
+@media (min-width: 1200px) {
+  .rail-handle { display: flex; }
+  body.rail-off .rail-handle {
+    opacity: 1; transform: none; pointer-events: auto;
+  }
+}
+
+.rail-handle:hover,
+.rail-handle:focus-visible {
+  color: var(--accent-2-ink);
+  border-color: var(--line-2);
+}
+
+
+
+/* ---- 09 响应 prefers-reduced-motion -------- */
 
 @media (prefers-reduced-motion: reduce) {
   *,

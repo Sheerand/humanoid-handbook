@@ -88,6 +88,148 @@
     listen(link, 'click', function (event) { event.preventDefault(); glide(0); });
   }
 
+  /* ---- 11. 外壳自动隐藏：目录与顶栏让路 ----
+     向下阅读时把左侧导航轨（桌面）与顶栏（平板/手机）收起，把页面让给正文；
+     向上滚、回到顶部、鼠标贴左边缘、或焦点进入目录时回来。
+     只切 class，不改布局：body 的 padding-left / padding-top 保持不变，避免重排。 */
+  function setupAutoHideShell() {
+    var rail = doc.getElementById('nav-rail');
+    var mast = one('.masthead');
+    if (!rail && !mast) return;
+
+    var railLinks = rail ? all('a', rail) : [];
+    var handle = doc.getElementById('rail-handle');
+    var hidden = false;   /* 由滚动方向决定 */
+    var peek = false;     /* 鼠标贴边 / 焦点进入时的临时露出 */
+    var pinned = false;   /* 点书签钉住，直到下一次向下滚动 */
+    var anchorY = scrollTop();
+    var direction = 0;
+    var graceUntil = 0;   /* 刚点过目录里的链接，这段时间内不自动收起 */
+    var jumping = false;  /* 跳章平滑滚动进行中，停下来之前也不收 */
+    var lastMove = 0;
+    var jumpStart = 0;
+
+    function paint() {
+      var off = hidden && !peek && !pinned;
+      if (rail) {
+        rail.classList.toggle('is-auto-hidden', off);
+        rail.setAttribute('aria-hidden', off ? 'true' : 'false');
+        /* 收起时移出 Tab 顺序，避免焦点落在看不见的链接上 */
+        for (var i = 0; i < railLinks.length; i += 1) {
+          if (off) railLinks[i].setAttribute('tabindex', '-1');
+          else railLinks[i].removeAttribute('tabindex');
+        }
+      }
+      if (mast) {
+        mast.classList.toggle('is-auto-hidden', off);
+      }
+      if (handle) handle.setAttribute('aria-expanded', off ? 'false' : 'true');
+      doc.body.classList.toggle('rail-off', off);
+    }
+
+    scrollers.push(function () {
+      var y = scrollTop();
+      /* 跳章滚动期间不收起，否则刚点完目录它就消失 */
+      if (jumping) {
+        if (Math.abs(y - anchorY) > 1) lastMove = Date.now();
+        anchorY = y;
+        if (Date.now() - lastMove > 260 || Date.now() - jumpStart > 4000) {
+          jumping = false;
+          /* 跳转落定后先当作「向上」，目录保持展开，等读者真正往下读再收 */
+          direction = -1;
+        }
+        return;
+      }
+      if (graceUntil) {
+        if (Date.now() < graceUntil) { anchorY = y; return; }
+        graceUntil = 0;
+        direction = -1;
+        anchorY = y;
+      }
+      /* 6px 死区，和回到顶部按钮同一条规则，避免触控板抖动反复翻转 */
+      if (Math.abs(y - anchorY) > 6) {
+        direction = y > anchorY ? 1 : -1;
+        anchorY = y;
+      }
+      var nearTop = y < 240;
+      var nextHidden = !nearTop && direction > 0;
+      /* 钉住状态遇到继续向下阅读就解除 */
+      if (pinned && direction > 0) { pinned = false; paint(); }
+      if (nextHidden !== hidden) {
+        hidden = nextHidden;
+        if (!hidden) peek = false;
+        paint();
+      }
+    });
+
+    /* 贴边书签：点一下钉住，再点一下放开 */
+    if (handle) {
+      listen(handle, 'click', function () {
+        pinned = !pinned;
+        if (pinned) peek = true;
+        paint();
+      });
+    }
+
+    /* 从目录 / 顶栏跳章时给 1.4 s 宽限，别刚点完就收起来 */
+    function armGrace(event) {
+      if (!closest(event.target, 'a[href^="#"]')) return;
+      jumping = true;
+      jumpStart = Date.now();
+      lastMove = jumpStart;
+      anchorY = scrollTop();
+    }
+    listen(rail, 'click', armGrace);
+    listen(mast, 'click', armGrace);
+
+    /* 用户一旦自己动滚轮 / 手指 / 键盘，跳转保护立刻结束，按真实意图走 */
+    function userIntent(down) {
+      if (!jumping && !graceUntil) return;
+      jumping = false;
+      graceUntil = 0;
+      direction = down ? 1 : -1;
+      /* 让下一帧仍能看出运动方向，不被死区吃掉 */
+      anchorY = scrollTop() - (down ? 20 : -20);
+    }
+    listen(window, 'wheel', function (event) { userIntent(event.deltaY > 0); }, { passive: true });
+    listen(window, 'touchmove', function () { userIntent(true); }, { passive: true });
+    listen(window, 'keydown', function (event) {
+      if (event.key === 'PageDown' || event.key === ' ' || event.key === 'ArrowDown') userIntent(true);
+      else if (event.key === 'PageUp' || event.key === 'ArrowUp') userIntent(false);
+    });
+
+    /* 桌面：目录收起后，鼠标贴左边缘 14px 就露出来，离开再收回去 */
+    if (rail) {
+      listen(doc, 'mousemove', function (event) {
+        if (window.innerWidth < 1200 || !hidden) return;
+        /* 书签自己处理：不把它算作「贴边」，否则一靠近就露出目录，书签反而点不到 */
+        if (handle && (event.target === handle || handle.contains(event.target))) return;
+        var x = event.clientX;
+        var want = x <= 14 ? true : (x > 292 ? false : peek);
+        if (want !== peek) { peek = want; paint(); }
+      }, { passive: true });
+
+      /* 焦点进入目录时强制露出，键盘用户不会被挡在外面 */
+      listen(rail, 'focusin', function () {
+        if (!peek) { peek = true; paint(); }
+      });
+      listen(rail, 'focusout', function (event) {
+        if (peek && (!event.relatedTarget || !rail.contains(event.relatedTarget))) {
+          peek = false; paint();
+        }
+      });
+    }
+
+    /* 手机：顶栏收起后，手指点屏幕顶部 48px 也能叫回来（触屏没有 hover） */
+    if (mast) {
+      listen(doc, 'touchstart', function (event) {
+        if (!hidden || !event.touches || !event.touches.length) return;
+        if (event.touches[0].clientY <= 24) { peek = true; paint(); }
+      }, { passive: true });
+    }
+  }
+
+
   /* ---- 4. 入场：只加一次 .is-visible ---- */
   function setupReveal() {
     var items = all('[data-reveal]');
@@ -569,6 +711,7 @@
     setupProgress(); setupToTop(); setupPromptWording(); setupNoBreak();
     setupReveal(); setupCode(); setupScrollHints(); setupReferenceTitles();
     setupMiniToc(); setupChapters(); setupDrawer(); setupReplayAnimations();
+    setupAutoHideShell();
     listen(window, 'scroll', schedule, { passive: true });
     listen(window, 'resize', schedule);
     schedule();
